@@ -23,7 +23,7 @@ LOCAL_TZ = pytz.timezone('Asia/Hebron')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ========== جدول التمارين (كامل) ==========
+# ========== جدول التمارين ==========
 GYM_SCHEDULE = {
     "Push": {
         "exercises": [
@@ -164,6 +164,7 @@ def update_streak(new_count):
 def add_task(date_str, time_str, desc, priority, repeat='none'):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # التحقق من وجود العمود repeat
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
     if 'repeat' in columns:
@@ -295,9 +296,8 @@ def handle_repeat(task_id):
     conn.close()
     schedule_reminder(new_id, new_date.isoformat(), task[1], task[2])
 
-# ========== إضافة المهام التلقائية اليومية ==========
+# ========== إضافة المهام التلقائية ==========
 DAILY_TASKS = [
-    # المهام اليومية الثابتة (صلوات + جيم)
     {"time": "04:00", "desc": "استيقاظ صلاة غنم - أجرت", "priority": "urgent_important", "repeat": "daily"},
     {"time": "12:00", "desc": "دهان للجمع - أجرت", "priority": "urgent_important", "repeat": "daily"},
     {"time": "12:40", "desc": "صلاة النهار - أجرت", "priority": "urgent_important", "repeat": "daily"},
@@ -305,32 +305,28 @@ DAILY_TASKS = [
     {"time": "16:20", "desc": "صلاة الصبر - أجرت", "priority": "urgent_important", "repeat": "daily"},
     {"time": "19:20", "desc": "صلاة مغرب - أجرت", "priority": "urgent_important", "repeat": "daily"},
     {"time": "20:40", "desc": "صلاة الخداء - أجرت", "priority": "urgent_important", "repeat": "daily"},
-    # مهام يومية أخرى
     {"time": "06:00", "desc": "افطار وترتيب - أجرت", "priority": "not_urgent_important", "repeat": "daily"},
     {"time": "08:00", "desc": "تنظيف حمام واستحمام - أجرت", "priority": "not_urgent_important", "repeat": "daily"},
     {"time": "16:00", "desc": "قراءة صفحة على الأقل من القران - أجرت", "priority": "not_urgent_important", "repeat": "daily"},
-    # مهمة مرة واحدة (غير متكررة)
     {"time": "10:00", "desc": "استراحة - أجرت", "priority": "not_urgent_not_important", "repeat": "none"}
 ]
 
 def add_daily_tasks():
-    """إضافة المهام اليومية التلقائية (تتجنب التكرار)"""
+    """إضافة المهام اليومية التلقائية باستخدام add_task لتجنب مشكلة العمود repeat"""
     today = date.today().isoformat()
+    added = 0
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    added = 0
     for task in DAILY_TASKS:
-        # التحقق إذا كانت المهمة موجودة بالفعل اليوم
         c.execute("SELECT COUNT(*) FROM tasks WHERE task_date=? AND task_time=? AND description=?", 
                   (today, task["time"], task["desc"]))
         if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO tasks (task_date, task_time, description, priority, repeat) VALUES (?,?,?,?,?)",
-                      (today, task["time"], task["desc"], task["priority"], task["repeat"]))
+            # استخدام add_task التي تتعامل مع غياب العمود repeat
+            add_task(today, task["time"], task["desc"], task["priority"], task["repeat"])
             added += 1
-    conn.commit()
     conn.close()
-    # إعادة جدولة المهام الجديدة
-    reschedule_pending_tasks()
+    if added > 0:
+        reschedule_pending_tasks()
     return added
 
 # ========== إرسال الإشعارات ==========
@@ -412,7 +408,7 @@ def reschedule_pending_tasks():
 # ========== تطبيق Flask ==========
 app = Flask(__name__)
 
-# قالب HTML (مع زر الإضافة التلقائية)
+# قالب HTML (بنفس الشكل السابق)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -541,7 +537,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# ===== صفحة الإحصائيات =====
+# ===== صفحات أخرى =====
 STATS_TEMPLATE = """
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>📊 إحصائيات</title>
@@ -564,7 +560,6 @@ STATS_TEMPLATE = """
 </body></html>
 """
 
-# ===== صفحة تعديل =====
 EDIT_TEMPLATE = """
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>✏️ تعديل</title>
@@ -688,6 +683,7 @@ def repair_db_route():
 
 @app.route('/add_daily_tasks')
 def add_daily_tasks_route():
+    repair_db()  # تأكد من وجود العمود repeat
     added = add_daily_tasks()
     send_ntfy(f"تم إضافة {added} مهمة تلقائية لليوم", "⭐ مهام يومية")
     return redirect('/')
