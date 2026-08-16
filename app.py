@@ -16,6 +16,77 @@ NTFY_TOPIC = "my_tasks_" + datetime.now().strftime("%Y%m%d%H%M%S")
 NTFY_PUBLISH_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 DB_NAME = "scheduler.db"
 
+# ========== جدول التمارين (Gym Scheduler) ==========
+GYM_SCHEDULE = {
+    "Push": {
+        "exercises": [
+            {"name": "Incline dumbbell press or incline bench press", "video": "https://www.youtube.com/watch?v=2y7Q4b0tYhI"},
+            {"name": "Bench press or chest press machine", "video": "https://www.youtube.com/watch?v=rT7DgCr-3pg"},
+            {"name": "Tricep pushdown ez bar (cable)", "video": "https://www.youtube.com/watch?v=2-LAMcpzodU"},
+            {"name": "Skull crusher ez bar", "video": "https://www.youtube.com/watch?v=d_KZxkY_0cM"},
+            {"name": "Lateral raise (dumbbell)", "video": "https://www.youtube.com/watch?v=3VcKaXpzq1s"},
+            {"name": "Shoulder press machine or overhead press (standing)", "video": "https://www.youtube.com/watch?v=Uj7F6wOH9vo"}
+        ],
+        "emoji": "💪"
+    },
+    "Pull": {
+        "exercises": [
+            {"name": "Lat pulldown (wide grip)", "video": "https://www.youtube.com/watch?v=CAwf7n6Luuc"},
+            {"name": "Single dumbbell row", "video": "https://www.youtube.com/watch?v=pYcpY20QaE8"},
+            {"name": "Cable row (close grip)", "video": "https://www.youtube.com/watch?v=GZbfZ033n74"},
+            {"name": "T-bar", "video": "https://www.youtube.com/watch?v=Jd7jW3HmNq0"},
+            {"name": "Ez bar bicep cable curl", "video": "https://www.youtube.com/watch?v=2y3H3tKxDqk"},
+            {"name": "Hammer curl rope cable", "video": "https://www.youtube.com/watch?v=1Uq_9GvYKOE"},
+            {"name": "Reverse fly machine", "video": "https://www.youtube.com/watch?v=4gKVyEGU4QE"},
+            {"name": "Back extension", "video": "https://www.youtube.com/watch?v=ph3p7pBcN0A"}
+        ],
+        "emoji": "🏋️"
+    },
+    "Legs": {
+        "exercises": [
+            {"name": "Squat", "video": "https://www.youtube.com/watch?v=aclHkVaku9U"},
+            {"name": "RDL", "video": "https://www.youtube.com/watch?v=JCXUYuzwNrM"},
+            {"name": "Leg extension machine", "video": "https://www.youtube.com/watch?v=YyvSfVjQeL0"},
+            {"name": "Hamstring curls machine", "video": "https://www.youtube.com/watch?v=1jPgulGf2fA"},
+            {"name": "Calf raises standing", "video": "https://www.youtube.com/watch?v=1WkZPpPyg7M"}
+        ],
+        "emoji": "🦵"
+    },
+    "Rest Day": {
+        "exercises": [
+            {"name": "استرخاء وتمدد - خذ قسطاً من الراحة", "video": "https://www.youtube.com/watch?v=Yx2VQnKxHZM"}
+        ],
+        "emoji": "😴"
+    },
+    "Chest and Back": {
+        "exercises": [
+            {"name": "Incline bench press or incline dumbbell press", "video": "https://www.youtube.com/watch?v=2y7Q4b0tYhI"},
+            {"name": "Flat dumbbell press or pec fly machine", "video": "https://www.youtube.com/watch?v=3VcKaXpzq1s"},
+            {"name": "Lat pulldown (close grip)", "video": "https://www.youtube.com/watch?v=CAwf7n6Luuc"},
+            {"name": "Single dumbbell row", "video": "https://www.youtube.com/watch?v=pYcpY20QaE8"},
+            {"name": "Cable row (wide grip)", "video": "https://www.youtube.com/watch?v=GZbfZ033n74"},
+            {"name": "T-bar", "video": "https://www.youtube.com/watch?v=Jd7jW3HmNq0"},
+            {"name": "Back extension", "video": "https://www.youtube.com/watch?v=ph3p7pBcN0A"}
+        ],
+        "emoji": "🏋️‍♂️"
+    },
+    "Arms": {
+        "exercises": [
+            {"name": "Tricep pushdown rope", "video": "https://www.youtube.com/watch?v=2-LAMcpzodU"},
+            {"name": "Skull crusher ez bar", "video": "https://www.youtube.com/watch?v=d_KZxkY_0cM"},
+            {"name": "Overhead rope tricep", "video": "https://www.youtube.com/watch?v=3NlI3nU9Z8E"},
+            {"name": "Preacher curl", "video": "https://www.youtube.com/watch?v=fI9h6TgLW8Y"},
+            {"name": "Hammer curl", "video": "https://www.youtube.com/watch?v=1Uq_9GvYKOE"},
+            {"name": "Dumbbell wrist curl (on bench)", "video": "https://www.youtube.com/watch?v=8xJk0lXyYIA"},
+            {"name": "Dumbbell wrist extension (also on bench)", "video": "https://www.youtube.com/watch?v=8xJk0lXyYIA"},
+            {"name": "Cable lateral raise (single arm)", "video": "https://www.youtube.com/watch?v=3VcKaXpzq1s"},
+            {"name": "Shoulder press machine or overhead press (standing)", "video": "https://www.youtube.com/watch?v=Uj7F6wOH9vo"},
+            {"name": "Reverse fly", "video": "https://www.youtube.com/watch?v=4gKVyEGU4QE"}
+        ],
+        "emoji": "💪"
+    }
+}
+
 # ========== قاعدة البيانات ==========
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -179,6 +250,8 @@ HTML_TEMPLATE = """
         .focus-mode .task-card { background: #334155 !important; color: white !important; border-color: #facc15 !important; }
         .delete-btn { transition: all 0.2s ease; }
         .delete-btn:hover { transform: scale(1.2); color: #dc2626 !important; }
+        .gym-btn { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .gym-btn:hover { transform: scale(1.05); }
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen p-4 md:p-8">
@@ -238,6 +311,13 @@ HTML_TEMPLATE = """
             </select>
             <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-3 rounded-xl transition shadow-lg shadow-indigo-200">➕ أضف</button>
         </form>
+    </div>
+
+    <!-- زر الجيم -->
+    <div class="text-center mb-6 fade-in">
+        <a href="/gym" class="gym-btn inline-block text-white font-bold text-xl py-4 px-12 rounded-2xl shadow-lg shadow-pink-200 transition transform hover:scale-105">
+            🏋️ جدول التمارين (Gym Scheduler)
+        </a>
     </div>
 
     <!-- مصفوفة الأربعة أرباع -->
@@ -307,7 +387,6 @@ HTML_TEMPLATE = """
     document.addEventListener('DOMContentLoaded', function() {
         const now = new Date();
         
-        // ضبط التاريخ (YYYY-MM-DD)
         const dateInput = document.getElementById('task_date');
         if (dateInput) {
             const year = now.getFullYear();
@@ -316,7 +395,6 @@ HTML_TEMPLATE = """
             dateInput.value = `${year}-${month}-${day}`;
         }
         
-        // ضبط الوقت (HH:MM)
         const timeInput = document.getElementById('task_time');
         if (timeInput) {
             const hours = String(now.getHours()).padStart(2, '0');
@@ -325,7 +403,6 @@ HTML_TEMPLATE = """
         }
     });
 
-    // وضع التركيز: يخفي الأرباع الأخرى ويبقي فقط "عاجل ومهم"
     let focusMode = false;
     function toggleFocus() {
         focusMode = !focusMode;
@@ -349,6 +426,70 @@ HTML_TEMPLATE = """
 </html>
 """
 
+# ========== صفحة الجيم (Gym Scheduler) ==========
+GYM_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>🏋️ جدول التمارين</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800&display=swap');
+        * { font-family: 'Tajawal', sans-serif; }
+        .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); }
+        .fade-in { animation: fadeIn 0.5s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .exercise-card { transition: all 0.2s ease; }
+        .exercise-card:hover { transform: scale(1.02); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); }
+        .video-btn { background: linear-gradient(135deg, #ff0000, #cc0000); }
+        .video-btn:hover { transform: scale(1.05); }
+        .back-btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .back-btn:hover { transform: scale(1.05); }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen p-4 md:p-8">
+
+<div class="max-w-6xl mx-auto fade-in">
+    <div class="glass rounded-3xl shadow-xl p-6 mb-6 border border-white/30">
+        <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+            <h1 class="text-3xl md:text-4xl font-black text-slate-800">🏋️ جدول التمارين</h1>
+            <a href="/" class="back-btn text-white font-bold py-2 px-6 rounded-xl transition shadow-lg shadow-purple-200">⬅️ العودة للرئيسية</a>
+        </div>
+    </div>
+
+    <!-- عرض الأيام -->
+    {% for day_name, day_data in gym_schedule.items() %}
+    <div class="glass rounded-3xl shadow-xl p-6 mb-6 border border-white/30 fade-in">
+        <h2 class="text-2xl font-bold text-slate-700 mb-4">{{ day_data.emoji }} {{ day_name }}</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% for exercise in day_data.exercises %}
+            <div class="exercise-card bg-white rounded-2xl p-4 shadow-sm border border-slate-200 flex flex-col gap-2">
+                <div class="flex justify-between items-start">
+                    <span class="font-bold text-slate-800 text-lg">{{ exercise.name }}</span>
+                    <a href="{{ exercise.video }}" target="_blank" class="video-btn text-white text-sm font-bold py-2 px-4 rounded-xl transition shadow-lg shadow-red-200">
+                        ▶️ شاهد الفيديو
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+
+    <!-- زر العودة -->
+    <div class="text-center mt-6">
+        <a href="/" class="back-btn text-white font-bold py-3 px-8 rounded-xl transition shadow-lg shadow-purple-200 inline-block">
+            ⬅️ العودة للرئيسية
+        </a>
+    </div>
+</div>
+
+</body>
+</html>
+"""
+
 @app.route('/')
 def index():
     # تحديث الستريك
@@ -363,7 +504,6 @@ def index():
         update_streak(current_streak)
     
     tasks = get_today_tasks()
-    # حساب النقاط والتقدم
     total = len(tasks)
     done_count = sum(1 for t in tasks if t[4] == 'done')
     progress = int((done_count / total) * 100) if total > 0 else 0
@@ -377,6 +517,13 @@ def index():
         progress=progress,
         today_score=today_score,
         ntfy_topic=NTFY_TOPIC
+    )
+
+@app.route('/gym')
+def gym():
+    return render_template_string(
+        GYM_HTML_TEMPLATE,
+        gym_schedule=GYM_SCHEDULE
     )
 
 @app.route('/add', methods=['POST'])
@@ -428,7 +575,6 @@ def respond(task_id, action):
     
     score = 0
     status = "pending"
-    # المهام العاجلة والمهمة تعطي نقاط مضاعفة
     base_score = 2 if priority == 'urgent_important' else 1
     
     if action == "done":
