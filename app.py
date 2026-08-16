@@ -2,7 +2,7 @@ import sqlite3
 import json
 import requests
 from datetime import datetime, date, timedelta
-import pytz  # تحتاج تثبيت: pip install pytz
+import pytz
 from flask import Flask, render_template_string, request, redirect, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -12,12 +12,12 @@ import logging
 
 # ========== الإعدادات الأساسية ==========
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:5000")
-NTFY_TOPIC = "my_scheduler_fixed"  # موضوع ثابت لتجنب تغيره عند إعادة التشغيل
+NTFY_TOPIC = "my_scheduler_fixed"  # موضوع ثابت
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 DB_NAME = "scheduler.db"
 
-# ========== المنطقة الزمنية المحلية (تعديل حسب منطقتك) ==========
-LOCAL_TZ = pytz.timezone('Asia/Riyadh')  # يمكنك تغييرها حسب موقعك
+# ========== المنطقة الزمنية - فلسطين ==========
+LOCAL_TZ = pytz.timezone('Asia/Hebron')  # توقيت فلسطين
 
 # ========== إعدادات التسجيل ==========
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -190,7 +190,7 @@ def delete_task(task_id):
 def mark_reminded(task_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("UPDATE tasks SET reminded_at=? WHERE id=?", (datetime.now().isoformat(), task_id))
+    c.execute("UPDATE tasks SET reminded_at=? WHERE id=?", (datetime.now(LOCAL_TZ).isoformat(), task_id))
     conn.commit()
     conn.close()
 
@@ -201,8 +201,10 @@ def send_ntfy(message, title="⏰ تذكير", actions=None):
     try:
         response = requests.post("https://ntfy.sh/", json=data, timeout=5)
         logger.info(f"📤 إرسال إشعار: {title} - {message[:30]}... (status: {response.status_code})")
+        return response
     except Exception as e:
         logger.error(f"❌ فشل إرسال الإشعار: {e}")
+        return None
 
 # ========== الجدولة ==========
 scheduler = BackgroundScheduler(timezone=LOCAL_TZ)
@@ -211,12 +213,19 @@ def schedule_reminder(task_id, task_date, task_time, desc):
     try:
         dt_str = f"{task_date} {task_time}"
         remind_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-        remind_dt = LOCAL_TZ.localize(remind_dt)  # تحديد المنطقة الزمنية
+        remind_dt = LOCAL_TZ.localize(remind_dt)
         now = datetime.now(LOCAL_TZ)
         
+        # إذا كان الوقت قد مضى بأقل من دقيقة، أرسل التذكير فوراً
         if remind_dt < now:
-            logger.warning(f"⏰ وقت التذكير مضى: {desc} في {remind_dt}")
-            return
+            diff_seconds = (now - remind_dt).total_seconds()
+            if diff_seconds <= 60:  # أقل من دقيقة
+                logger.info(f"⏰ الوقت مضى بـ {diff_seconds:.0f} ثانية، سيتم إرسال التذكير فوراً")
+                send_initial_reminder(task_id, desc)
+                return
+            else:
+                logger.warning(f"⏰ وقت التذكير مضى: {desc} في {remind_dt} (فارق {diff_seconds:.0f} ثانية)")
+                return
         
         # جدولة التذكير الأول
         scheduler.add_job(
@@ -660,7 +669,7 @@ def reset_streak_route():
 if __name__ == '__main__':
     init_db()
     
-    # إعداد المجدول مع إعدادات إضافية
+    # إعداد المجدول
     scheduler.add_executor('default', ThreadPoolExecutor(max_workers=10))
     scheduler.start()
     logger.info("🚀 بدء تشغيل المجدول...")
