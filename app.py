@@ -12,18 +12,18 @@ import logging
 
 # ========== الإعدادات الأساسية ==========
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:5000")
-NTFY_TOPIC = "my_scheduler_fixed"  # موضوع ثابت
+NTFY_TOPIC = "my_scheduler_fixed"
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 DB_NAME = "scheduler.db"
 
 # ========== المنطقة الزمنية - فلسطين ==========
-LOCAL_TZ = pytz.timezone('Asia/Hebron')  # توقيت فلسطين
+LOCAL_TZ = pytz.timezone('Asia/Hebron')
 
 # ========== إعدادات التسجيل ==========
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ========== جدول التمارين (Gym Scheduler) ==========
+# ========== جدول التمارين ==========
 GYM_SCHEDULE = {
     "Push": {
         "exercises": [
@@ -216,10 +216,10 @@ def schedule_reminder(task_id, task_date, task_time, desc):
         remind_dt = LOCAL_TZ.localize(remind_dt)
         now = datetime.now(LOCAL_TZ)
         
-        # إذا كان الوقت قد مضى بأقل من دقيقة، أرسل التذكير فوراً
+        # ✅ زيادة المهلة إلى دقيقتين (120 ثانية)
         if remind_dt < now:
             diff_seconds = (now - remind_dt).total_seconds()
-            if diff_seconds <= 60:
+            if diff_seconds <= 120:  # دقيقتين
                 logger.info(f"⏰ الوقت مضى بـ {diff_seconds:.0f} ثانية، سيتم إرسال التذكير فوراً")
                 send_initial_reminder(task_id, desc)
                 return
@@ -256,7 +256,6 @@ def send_initial_reminder(task_id, desc):
         logger.info(f"🔔 تنفيذ تذكير للمهمة: {desc} (ID: {task_id})")
         mark_reminded(task_id)
         
-        # تأكد من أن BASE_URL صحيح
         base = os.environ.get("BASE_URL", "http://localhost:5000")
         logger.info(f"📍 BASE_URL المستخدم: {base}")
         
@@ -277,7 +276,6 @@ def send_check_reminder(task_id, desc):
         logger.error(f"❌ فشل في إرسال تذكير المتابعة: {e}")
 
 def reschedule_pending_tasks():
-    """إعادة جدولة المهام المعلقة عند بدء التشغيل"""
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -292,7 +290,7 @@ def reschedule_pending_tasks():
 # ========== تطبيق Flask ==========
 app = Flask(__name__)
 
-# قائمة الأولويات للعرض
+# قائمة الأولويات
 PRIORITY_MAP = {
     'urgent_important': {'label': '🔴 عاجل ومهم', 'color': 'bg-red-50 border-red-500', 'badge': 'urgent'},
     'not_urgent_important': {'label': '🔵 غير عاجل لكن مهم', 'color': 'bg-blue-50 border-blue-500', 'badge': 'important'},
@@ -674,15 +672,12 @@ def reset_streak_route():
 if __name__ == '__main__':
     init_db()
     
-    # إعداد المجدول
     scheduler.add_executor('default', ThreadPoolExecutor(max_workers=10))
     scheduler.start()
     logger.info("🚀 بدء تشغيل المجدول...")
     
-    # إعادة جدولة المهام المعلقة
     reschedule_pending_tasks()
     
-    # تشغيل الخادم
     logger.info(f"🚀 الخادم شغال على: {BASE_URL}")
     logger.info(f"📲 موضوع NTFY: {NTFY_TOPIC}")
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
