@@ -23,14 +23,75 @@ LOCAL_TZ = pytz.timezone('Asia/Hebron')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ========== جدول التمارين (مختصر للاختصار) ==========
+# ========== جدول التمارين الكامل ==========
 GYM_SCHEDULE = {
-    "Push": {"exercises": [{"name": "Incline dumbbell press", "video": "https://www.youtube.com/watch?v=2y7Q4b0tYhI"}], "emoji": "💪"},
-    "Pull": {"exercises": [{"name": "Lat pulldown", "video": "https://www.youtube.com/watch?v=CAwf7n6Luuc"}], "emoji": "🏋️"},
-    "Legs": {"exercises": [{"name": "Squat", "video": "https://www.youtube.com/watch?v=aclHkVaku9U"}], "emoji": "🦵"},
-    "Rest Day": {"exercises": [{"name": "استرخاء", "video": "https://www.youtube.com/watch?v=Yx2VQnKxHZM"}], "emoji": "😴"},
-    "Chest and Back": {"exercises": [{"name": "Incline bench press", "video": "https://www.youtube.com/watch?v=2y7Q4b0tYhI"}], "emoji": "🏋️‍♂️"},
-    "Arms": {"exercises": [{"name": "Tricep pushdown", "video": "https://www.youtube.com/watch?v=2-LAMcpzodU"}], "emoji": "💪"}
+    "Push": {
+        "exercises": [
+            {"name": "Incline dumbbell press or incline bench press", "video": "https://www.youtube.com/watch?v=2y7Q4b0tYhI"},
+            {"name": "Bench press or chest press machine", "video": "https://www.youtube.com/watch?v=rT7DgCr-3pg"},
+            {"name": "Tricep pushdown ez bar (cable)", "video": "https://www.youtube.com/watch?v=2-LAMcpzodU"},
+            {"name": "Skull crusher ez bar", "video": "https://www.youtube.com/watch?v=d_KZxkY_0cM"},
+            {"name": "Lateral raise (dumbbell)", "video": "https://www.youtube.com/watch?v=3VcKaXpzq1s"},
+            {"name": "Shoulder press machine or overhead press (standing)", "video": "https://www.youtube.com/watch?v=Uj7F6wOH9vo"}
+        ],
+        "emoji": "💪"
+    },
+    "Pull": {
+        "exercises": [
+            {"name": "Lat pulldown (wide grip)", "video": "https://www.youtube.com/watch?v=CAwf7n6Luuc"},
+            {"name": "Single dumbbell row", "video": "https://www.youtube.com/watch?v=pYcpY20QaE8"},
+            {"name": "Cable row (close grip)", "video": "https://www.youtube.com/watch?v=GZbfZ033n74"},
+            {"name": "T-bar", "video": "https://www.youtube.com/watch?v=Jd7jW3HmNq0"},
+            {"name": "Ez bar bicep cable curl", "video": "https://www.youtube.com/watch?v=2y3H3tKxDqk"},
+            {"name": "Hammer curl rope cable", "video": "https://www.youtube.com/watch?v=1Uq_9GvYKOE"},
+            {"name": "Reverse fly machine", "video": "https://www.youtube.com/watch?v=4gKVyEGU4QE"},
+            {"name": "Back extension", "video": "https://www.youtube.com/watch?v=ph3p7pBcN0A"}
+        ],
+        "emoji": "🏋️"
+    },
+    "Legs": {
+        "exercises": [
+            {"name": "Squat", "video": "https://www.youtube.com/watch?v=aclHkVaku9U"},
+            {"name": "RDL", "video": "https://www.youtube.com/watch?v=JCXUYuzwNrM"},
+            {"name": "Leg extension machine", "video": "https://www.youtube.com/watch?v=YyvSfVjQeL0"},
+            {"name": "Hamstring curls machine", "video": "https://www.youtube.com/watch?v=1jPgulGf2fA"},
+            {"name": "Calf raises standing", "video": "https://www.youtube.com/watch?v=1WkZPpPyg7M"}
+        ],
+        "emoji": "🦵"
+    },
+    "Rest Day": {
+        "exercises": [
+            {"name": "استرخاء وتمدد - خذ قسطاً من الراحة", "video": "https://www.youtube.com/watch?v=Yx2VQnKxHZM"}
+        ],
+        "emoji": "😴"
+    },
+    "Chest and Back": {
+        "exercises": [
+            {"name": "Incline bench press or incline dumbbell press", "video": "https://www.youtube.com/watch?v=2y7Q4b0tYhI"},
+            {"name": "Flat dumbbell press or pec fly machine", "video": "https://www.youtube.com/watch?v=3VcKaXpzq1s"},
+            {"name": "Lat pulldown (close grip)", "video": "https://www.youtube.com/watch?v=CAwf7n6Luuc"},
+            {"name": "Single dumbbell row", "video": "https://www.youtube.com/watch?v=pYcpY20QaE8"},
+            {"name": "Cable row (wide grip)", "video": "https://www.youtube.com/watch?v=GZbfZ033n74"},
+            {"name": "T-bar", "video": "https://www.youtube.com/watch?v=Jd7jW3HmNq0"},
+            {"name": "Back extension", "video": "https://www.youtube.com/watch?v=ph3p7pBcN0A"}
+        ],
+        "emoji": "🏋️‍♂️"
+    },
+    "Arms": {
+        "exercises": [
+            {"name": "Tricep pushdown rope", "video": "https://www.youtube.com/watch?v=2-LAMcpzodU"},
+            {"name": "Skull crusher ez bar", "video": "https://www.youtube.com/watch?v=d_KZxkY_0cM"},
+            {"name": "Overhead rope tricep", "video": "https://www.youtube.com/watch?v=3NlI3nU9Z8E"},
+            {"name": "Preacher curl", "video": "https://www.youtube.com/watch?v=fI9h6TgLW8Y"},
+            {"name": "Hammer curl", "video": "https://www.youtube.com/watch?v=1Uq_9GvYKOE"},
+            {"name": "Dumbbell wrist curl (on bench)", "video": "https://www.youtube.com/watch?v=8xJk0lXyYIA"},
+            {"name": "Dumbbell wrist extension (also on bench)", "video": "https://www.youtube.com/watch?v=8xJk0lXyYIA"},
+            {"name": "Cable lateral raise (single arm)", "video": "https://www.youtube.com/watch?v=3VcKaXpzq1s"},
+            {"name": "Shoulder press machine or overhead press (standing)", "video": "https://www.youtube.com/watch?v=Uj7F6wOH9vo"},
+            {"name": "Reverse fly", "video": "https://www.youtube.com/watch?v=4gKVyEGU4QE"}
+        ],
+        "emoji": "💪"
+    }
 }
 
 # ========== دوال قاعدة البيانات ==========
@@ -38,7 +99,6 @@ def repair_db():
     """إصلاح قاعدة البيانات: إضافة العمود repeat إذا لم يكن موجوداً"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # التحقق من وجود العمود repeat
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
     if 'repeat' not in columns:
@@ -71,7 +131,7 @@ def init_db():
         c.execute("INSERT INTO streak (last_active_date, count) VALUES (?, ?)", (date.today().isoformat(), 0))
     conn.commit()
     conn.close()
-    repair_db()  # ترقية إضافية للتأكد
+    repair_db()
 
 def get_streak():
     conn = sqlite3.connect(DB_NAME)
@@ -105,7 +165,6 @@ def update_streak(new_count):
 def add_task(date_str, time_str, desc, priority, repeat='none'):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # التأكد من وجود العمود repeat (مرة أخرى)
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
     if 'repeat' in columns:
@@ -126,7 +185,6 @@ def get_today_tasks():
         c.execute("SELECT id, task_time, description, priority, status, score, repeat FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
         data = c.fetchall()
     except sqlite3.OperationalError:
-        # إذا كان العمود repeat غير موجود
         c.execute("SELECT id, task_time, description, priority, status, score FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
         data = c.fetchall()
         data = [list(row) + ['none'] for row in data]
@@ -169,7 +227,6 @@ def delete_task(task_id):
     c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     conn.commit()
     conn.close()
-    logger.info(f"🗑️ تم حذف المهمة {task_id}")
 
 def delete_old_tasks():
     today = date.today().isoformat()
@@ -179,7 +236,6 @@ def delete_old_tasks():
     deleted = c.rowcount
     conn.commit()
     conn.close()
-    logger.info(f"🧹 تم حذف {deleted} مهمة قديمة")
     return deleted
 
 def mark_reminded(task_id):
@@ -270,7 +326,6 @@ def schedule_reminder(task_id, task_date, task_time, desc):
                 logger.warning(f"⏰ وقت التذكير مضى: {desc} في {remind_dt} (فارق {diff_seconds:.0f} ثانية)")
                 return
         
-        # تذكير قبل 5 دقائق
         pre_dt = remind_dt - timedelta(minutes=5)
         if pre_dt > now:
             scheduler.add_job(func=send_pre_reminder, trigger=DateTrigger(run_date=pre_dt, timezone=LOCAL_TZ), args=[task_id, desc], id=f"pre_{task_id}", replace_existing=True)
@@ -317,7 +372,6 @@ def reschedule_pending_tasks():
 # ========== تطبيق Flask ==========
 app = Flask(__name__)
 
-# قالب HTML (مبسط ولكن يعمل)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -337,7 +391,6 @@ HTML_TEMPLATE = """
 </head>
 <body>
 <div class="max-w-6xl mx-auto">
-    <!-- الهيدر -->
     <div class="glass rounded-3xl shadow-xl p-6 mb-6">
         <div class="flex flex-wrap justify-between items-center">
             <div>
@@ -362,7 +415,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- إضافة مهمة -->
     <div class="glass rounded-3xl shadow-xl p-6 mb-6">
         <h2 class="text-xl font-bold mb-4"><i class="fas fa-plus-circle text-indigo-600"></i> إضافة مهمة</h2>
         <form method="POST" action="/add" class="grid grid-cols-1 md:grid-cols-5 gap-3">
@@ -385,7 +437,6 @@ HTML_TEMPLATE = """
         </form>
     </div>
 
-    <!-- أزرار سريعة -->
     <div class="flex flex-wrap gap-3 mb-6">
         <a href="/gym" class="bg-pink-500 text-white px-6 py-2 rounded-xl">🏋️ جدول التمارين</a>
         <button onclick="toggleFocus()" class="bg-indigo-500 text-white px-6 py-2 rounded-xl">🎯 تركيز</button>
@@ -394,34 +445,42 @@ HTML_TEMPLATE = """
         <form action="/reset_streak" method="POST" class="inline"><button class="bg-slate-300 px-6 py-2 rounded-xl">🔄 إعادة الستريك</button></form>
     </div>
 
-    <!-- المهام -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {% for key, label, color in [('urgent_important','🔴 عاجل ومهم','red'), ('not_urgent_important','🔵 غير عاجل مهم','blue'), ('urgent_not_important','🟡 عاجل غير مهم','yellow'), ('not_urgent_not_important','⚪ غير عاجل غير مهم','gray')] %}
+        {% set quadrant_info = [('urgent_important','🔴 عاجل ومهم','red'), ('not_urgent_important','🔵 غير عاجل مهم','blue'), ('urgent_not_important','🟡 عاجل غير مهم','yellow'), ('not_urgent_not_important','⚪ غير عاجل غير مهم','gray')] %}
+        {% for key, label, color in quadrant_info %}
         <div class="glass rounded-2xl p-4 border-2 border-{{ color }}-300">
             <h3 class="font-bold">{{ label }} ({{ tasks|selectattr('3','equalto',key)|list|length }})</h3>
-            {% for task in tasks if task[3]==key %}
-            <div class="bg-white p-3 rounded-xl shadow-sm mt-2 border-r-4 border-{{ color }}-400">
-                <div class="flex justify-between">
-                    <div><span class="font-bold">{{ task[1] }}</span> - {{ task[2] }} 
-                        {% if task[6]!='none' %}<span class="text-xs text-purple-600">({{ task[6] }})</span>{% endif %}
+            {% set ns = namespace(found=false) %}
+            {% for task in tasks %}
+                {% if task[3] == key %}
+                    {% set ns.found = true %}
+                    <div class="bg-white p-3 rounded-xl shadow-sm mt-2 border-r-4 border-{{ color }}-400">
+                        <div class="flex justify-between">
+                            <div><span class="font-bold">{{ task[1] }}</span> - {{ task[2] }}
+                                {% if task[6] != 'none' %}<span class="text-xs text-purple-600">({{ task[6] }})</span>{% endif %}
+                            </div>
+                            <div class="flex gap-1">
+                                {% if task[4] == 'done' %}✅
+                                {% elif task[4] == 'late' %}❌
+                                {% elif task[4] == 'skipped' %}⏭
+                                {% else %}⏳{% endif %}
+                                <a href="/edit/{{ task[0] }}" class="text-blue-500"><i class="fas fa-edit"></i></a>
+                                <a href="/delete/{{ task[0] }}" onclick="return confirm('حذف؟')" class="text-red-500"><i class="fas fa-trash"></i></a>
+                            </div>
+                        </div>
+                        {% if task[4] == 'pending' %}
+                        <div class="flex gap-1 mt-1">
+                            <a href="/respond/{{ task[0] }}/done" class="bg-green-500 text-white action-btn">✅ أنجزت</a>
+                            <a href="/respond/{{ task[0] }}/late" class="bg-red-500 text-white action-btn">❌ متأخر</a>
+                            <a href="/respond/{{ task[0] }}/skip" class="bg-gray-400 text-white action-btn">⏭ تخطي</a>
+                        </div>
+                        {% endif %}
                     </div>
-                    <div class="flex gap-1">
-                        {% if task[4]=='done' %}✅{% elif task[4]=='late' %}❌{% elif task[4]=='skipped' %}⏭{% else %}⏳{% endif %}
-                        <a href="/edit/{{ task[0] }}" class="text-blue-500"><i class="fas fa-edit"></i></a>
-                        <a href="/delete/{{ task[0] }}" onclick="return confirm('حذف؟')" class="text-red-500"><i class="fas fa-trash"></i></a>
-                    </div>
-                </div>
-                {% if task[4]=='pending' %}
-                <div class="flex gap-1 mt-1">
-                    <a href="/respond/{{ task[0] }}/done" class="bg-green-500 text-white action-btn">✅ أنجزت</a>
-                    <a href="/respond/{{ task[0] }}/late" class="bg-red-500 text-white action-btn">❌ متأخر</a>
-                    <a href="/respond/{{ task[0] }}/skip" class="bg-gray-400 text-white action-btn">⏭ تخطي</a>
-                </div>
                 {% endif %}
-            </div>
-            {% else %}
-            <p class="text-slate-400 text-center py-4">لا توجد مهام</p>
             {% endfor %}
+            {% if not ns.found %}
+                <p class="text-slate-400 text-center py-4">لا توجد مهام</p>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
@@ -443,7 +502,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# ===== صفحة الإحصائيات =====
 STATS_TEMPLATE = """
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>📊 إحصائيات</title>
@@ -466,7 +524,6 @@ STATS_TEMPLATE = """
 </body></html>
 """
 
-# ===== صفحة تعديل =====
 EDIT_TEMPLATE = """
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>✏️ تعديل</title>
@@ -503,11 +560,19 @@ GYM_HTML_TEMPLATE = """
 <script src="https://cdn.tailwindcss.com"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>*{font-family:'Tajawal',sans-serif;}</style></head>
 <body class="bg-gradient-to-br from-slate-50 to-blue-50 p-8">
-<div class="max-w-4xl mx-auto">
+<div class="max-w-6xl mx-auto">
     <div class="glass rounded-3xl p-6 shadow-xl"><div class="flex justify-between"><h1 class="text-3xl font-black"><i class="fas fa-dumbbell text-pink-500"></i> جدول التمارين</h1><a href="/" class="bg-indigo-500 text-white px-4 py-2 rounded-xl">العودة</a></div></div>
     {% for day, data in gym_schedule.items() %}
-    <div class="glass rounded-3xl p-6 mt-4 shadow-xl"><h2 class="text-2xl font-bold">{{ data.emoji }} {{ day }}</h2>
-        {% for ex in data.exercises %}<div class="bg-white p-3 rounded-xl shadow-sm mt-2 flex justify-between"><span>{{ ex.name }}</span><a href="{{ ex.video }}" target="_blank" class="bg-red-500 text-white px-3 py-1 rounded-xl text-sm">▶️ شاهد</a></div>{% endfor %}
+    <div class="glass rounded-3xl p-6 mt-4 shadow-xl">
+        <h2 class="text-2xl font-bold">{{ data.emoji }} {{ day }}</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+            {% for ex in data.exercises %}
+            <div class="bg-white p-3 rounded-xl shadow-sm flex justify-between items-center">
+                <span>{{ ex.name }}</span>
+                <a href="{{ ex.video }}" target="_blank" class="bg-red-500 text-white px-3 py-1 rounded-xl text-sm hover:bg-red-600 transition"><i class="fas fa-play"></i> شاهد</a>
+            </div>
+            {% endfor %}
+        </div>
     </div>{% endfor %}
 </div>
 </body></html>
@@ -629,7 +694,6 @@ def reset_streak_route():
     reset_streak()
     return redirect('/')
 
-# ========== التشغيل ==========
 if __name__ == '__main__':
     init_db()
     scheduler.add_executor('default', ThreadPoolExecutor(max_workers=10))
