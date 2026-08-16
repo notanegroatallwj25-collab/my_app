@@ -12,18 +12,18 @@ import logging
 
 # ========== الإعدادات الأساسية ==========
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:5000")
-NTFY_TOPIC = "my_scheduler_fixed"
+NTFY_TOPIC = "my_scheduler_fixed"  # موضوع ثابت
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 DB_NAME = "scheduler.db"
 
 # ========== المنطقة الزمنية - فلسطين ==========
-LOCAL_TZ = pytz.timezone('Asia/Hebron')
+LOCAL_TZ = pytz.timezone('Asia/Hebron')  # توقيت فلسطين
 
 # ========== إعدادات التسجيل ==========
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ========== جدول التمارين ==========
+# ========== جدول التمارين (Gym Scheduler) ==========
 GYM_SCHEDULE = {
     "Push": {
         "exercises": [
@@ -216,10 +216,10 @@ def schedule_reminder(task_id, task_date, task_time, desc):
         remind_dt = LOCAL_TZ.localize(remind_dt)
         now = datetime.now(LOCAL_TZ)
         
-        # ✅ زيادة المهلة إلى دقيقتين (120 ثانية)
+        # إذا كان الوقت قد مضى بأقل من دقيقتين، أرسل التذكير فوراً
         if remind_dt < now:
             diff_seconds = (now - remind_dt).total_seconds()
-            if diff_seconds <= 120:  # دقيقتين
+            if diff_seconds <= 120:
                 logger.info(f"⏰ الوقت مضى بـ {diff_seconds:.0f} ثانية، سيتم إرسال التذكير فوراً")
                 send_initial_reminder(task_id, desc)
                 return
@@ -257,7 +257,7 @@ def send_initial_reminder(task_id, desc):
         mark_reminded(task_id)
         
         base = os.environ.get("BASE_URL", "http://localhost:5000")
-        logger.info(f"📍 BASE_URL المستخدم: {base}")
+        logger.info(f"📍 BASE_URL المستخدم في الإشعار: {base}")
         
         actions = [
             {"id": "done", "label": "✅ أنجزتها", "action": "http", "url": f"{base}/respond/{task_id}/done"},
@@ -276,6 +276,7 @@ def send_check_reminder(task_id, desc):
         logger.error(f"❌ فشل في إرسال تذكير المتابعة: {e}")
 
 def reschedule_pending_tasks():
+    """إعادة جدولة المهام المعلقة عند بدء التشغيل"""
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -323,6 +324,8 @@ HTML_TEMPLATE = """
         .delete-btn:hover { transform: scale(1.2); color: #dc2626 !important; }
         .gym-btn { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
         .gym-btn:hover { transform: scale(1.05); }
+        .action-btn { transition: all 0.2s ease; font-size: 14px; padding: 2px 8px; border-radius: 8px; }
+        .action-btn:hover { transform: scale(1.1); }
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen p-4 md:p-8">
@@ -411,22 +414,32 @@ HTML_TEMPLATE = """
                 {% for task in tasks %}
                     {% if task[3] == key %}
                         {% set ns.found = true %}
-                        <div class="task-card bg-white p-3 rounded-xl shadow-sm border-r-4 {{ color }} flex justify-between items-center gap-2">
-                            <div class="flex-1">
-                                <span class="font-bold text-sm text-slate-600">{{ task[1] }}</span>
-                                <p class="text-sm font-medium text-slate-800">{{ task[2] }}</p>
+                        <div class="task-card bg-white p-3 rounded-xl shadow-sm border-r-4 {{ color }} flex flex-col gap-2">
+                            <div class="flex justify-between items-center">
+                                <div class="flex-1">
+                                    <span class="font-bold text-sm text-slate-600">{{ task[1] }}</span>
+                                    <p class="text-sm font-medium text-slate-800">{{ task[2] }}</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    {% if task[4] == 'done' %} <span class="text-green-500 text-xl">✅</span>
+                                    {% elif task[4] == 'late' %} <span class="text-red-500 text-xl">❌</span>
+                                    {% elif task[4] == 'skipped' %} <span class="text-gray-400 text-xl">⏭</span>
+                                    {% else %} <span class="text-yellow-500 text-xl">⏳</span>
+                                    {% endif %}
+                                    {% if task[5] != 0 %}
+                                        <span class="text-xs font-bold {% if task[5] > 0 %}text-green-600{% else %}text-red-600{% endif %}">({{ task[5] }})</span>
+                                    {% endif %}
+                                    <a href="/delete/{{ task[0] }}" onclick="return confirm('هل أنت متأكد من حذف هذه المهمة؟')" class="text-red-400 hover:text-red-600 text-lg font-bold ml-1 delete-btn">✕</a>
+                                </div>
                             </div>
-                            <div class="flex items-center gap-2">
-                                {% if task[4] == 'done' %} <span class="text-green-500 text-xl">✅</span>
-                                {% elif task[4] == 'late' %} <span class="text-red-500 text-xl">❌</span>
-                                {% elif task[4] == 'skipped' %} <span class="text-gray-400 text-xl">⏭</span>
-                                {% else %} <span class="text-yellow-500 text-xl">⏳</span>
-                                {% endif %}
-                                {% if task[5] != 0 %}
-                                    <span class="text-xs font-bold {% if task[5] > 0 %}text-green-600{% else %}text-red-600{% endif %}">({{ task[5] }})</span>
-                                {% endif %}
-                                <a href="/delete/{{ task[0] }}" onclick="return confirm('هل أنت متأكد من حذف هذه المهمة؟')" class="text-red-400 hover:text-red-600 text-lg font-bold ml-1 delete-btn">✕</a>
+                            <!-- أزرار تحديث الحالة (للمهام المعلقة فقط) -->
+                            {% if task[4] == 'pending' %}
+                            <div class="flex flex-wrap gap-1 justify-end">
+                                <a href="/respond/{{ task[0] }}/done" class="bg-green-500 hover:bg-green-600 text-white action-btn">✅ أنجزت</a>
+                                <a href="/respond/{{ task[0] }}/late" class="bg-red-500 hover:bg-red-600 text-white action-btn">❌ متأخر</a>
+                                <a href="/respond/{{ task[0] }}/skip" class="bg-gray-400 hover:bg-gray-500 text-white action-btn">⏭ تخطي</a>
                             </div>
+                            {% endif %}
                         </div>
                     {% endif %}
                 {% endfor %}
@@ -660,6 +673,7 @@ def respond(task_id, action):
         current = get_streak()
         update_streak(current + 1)
     
+    # إشعار تأكيد
     send_ntfy(f"✅ تم تسجيل ردك على '{task[2]}' كـ {status} (نقاط: {score})", "تم التحديث")
     return redirect('/')
 
@@ -672,10 +686,12 @@ def reset_streak_route():
 if __name__ == '__main__':
     init_db()
     
+    # إعداد المجدول
     scheduler.add_executor('default', ThreadPoolExecutor(max_workers=10))
     scheduler.start()
     logger.info("🚀 بدء تشغيل المجدول...")
     
+    # إعادة جدولة المهام المعلقة
     reschedule_pending_tasks()
     
     logger.info(f"🚀 الخادم شغال على: {BASE_URL}")
