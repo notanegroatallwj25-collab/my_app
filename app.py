@@ -16,17 +16,16 @@ NTFY_TOPIC = "my_tasks_" + datetime.now().strftime("%Y%m%d%H%M%S")
 NTFY_PUBLISH_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 DB_NAME = "scheduler.db"
 
-# ========== قاعدة البيانات (مطورة) ==========
+# ========== قاعدة البيانات ==========
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # إضافة عمود priority وأنواعه
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_date TEXT,
         task_time TEXT,
         description TEXT,
-        priority TEXT DEFAULT 'urgent_important', -- urgent_important, not_urgent_important, urgent_not_important, not_urgent_not_important
+        priority TEXT DEFAULT 'urgent_important',
         status TEXT DEFAULT 'pending',
         score INTEGER DEFAULT 0,
         reminded_at TEXT NULL
@@ -83,7 +82,6 @@ def get_today_tasks():
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # نرتب حسب الأولوية (عاجل مهم أولاً)
     c.execute("SELECT id, task_time, description, priority, status, score FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
     data = c.fetchall()
     conn.close()
@@ -101,6 +99,13 @@ def update_task_status(task_id, status, score):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("UPDATE tasks SET status=?, score=? WHERE id=?", (status, score, task_id))
+    conn.commit()
+    conn.close()
+
+def delete_task(task_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     conn.commit()
     conn.close()
 
@@ -139,15 +144,15 @@ def send_initial_reminder(task_id, desc):
 def send_check_reminder(task_id, desc):
     send_ntfy(f"⏳ مضت 15 دقيقة على {desc}.\nرد عبر الواجهة.", "⚠️ استفسار")
 
-# ========== تطبيق Flask (الواجهة الجديدة الأسطورية) ==========
+# ========== تطبيق Flask ==========
 app = Flask(__name__)
 
 # قائمة الأولويات للعرض
 PRIORITY_MAP = {
     'urgent_important': {'label': '🔴 عاجل ومهم', 'color': 'bg-red-50 border-red-500', 'badge': 'urgent'},
     'not_urgent_important': {'label': '🔵 غير عاجل لكن مهم', 'color': 'bg-blue-50 border-blue-500', 'badge': 'important'},
-    'urgent_not_important': {'label': '🟡 عاجل لكن غير مهم', 'color': 'bg-yellow-50 border-yellow-500', 'badge': 'urgent-not'},
-    'not_urgent_not_important': {'label': '⚪ غير عاجل وغير مهم', 'color': 'bg-gray-50 border-gray-400', 'badge': 'trivial'}
+    'urgent_not_important': {'label': '🟡 عاجل لكن غير مهم', 'color': 'bg-yellow-50 border-yellow-400', 'badge': 'urgent-not'},
+    'not_urgent_not_important': {'label': '⚪ غير عاجل وغير مهم', 'color': 'bg-gray-50 border-gray-300', 'badge': 'trivial'}
 }
 
 HTML_TEMPLATE = """
@@ -172,6 +177,8 @@ HTML_TEMPLATE = """
         .progress-bar { transition: width 1s ease-in-out; }
         .focus-mode { background: #1e293b; color: white; }
         .focus-mode .task-card { background: #334155 !important; color: white !important; border-color: #facc15 !important; }
+        .delete-btn { transition: all 0.2s ease; }
+        .delete-btn:hover { transform: scale(1.2); color: #dc2626 !important; }
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen p-4 md:p-8">
@@ -216,12 +223,12 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- إضافة مهمة جديدة (مطورة) -->
+    <!-- إضافة مهمة جديدة -->
     <div class="glass rounded-3xl shadow-xl p-6 mb-6 border border-white/30 fade-in">
         <h2 class="text-xl font-bold text-slate-700 mb-4">➕ إضافة مهمة</h2>
         <form method="POST" action="/add" class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <input type="date" name="task_date" value="{{ today }}" class="rounded-xl border-slate-200 p-3 focus:ring-2 focus:ring-indigo-400 outline-none">
-            <input type="time" name="task_time" class="rounded-xl border-slate-200 p-3 focus:ring-2 focus:ring-indigo-400 outline-none">
+            <input type="date" id="task_date" name="task_date" class="rounded-xl border-slate-200 p-3 focus:ring-2 focus:ring-indigo-400 outline-none">
+            <input type="time" id="task_time" name="task_time" class="rounded-xl border-slate-200 p-3 focus:ring-2 focus:ring-indigo-400 outline-none">
             <input type="text" name="description" placeholder="وصف المهمة..." class="rounded-xl border-slate-200 p-3 focus:ring-2 focus:ring-indigo-400 outline-none">
             <select name="priority" class="rounded-xl border-slate-200 p-3 focus:ring-2 focus:ring-indigo-400 outline-none bg-white">
                 <option value="urgent_important">🔴 عاجل ومهم</option>
@@ -233,7 +240,7 @@ HTML_TEMPLATE = """
         </form>
     </div>
 
-    <!-- مصفوفة الأربعة أرباع (القصة الحقيقية) -->
+    <!-- مصفوفة الأربعة أرباع -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 fade-in">
         {% set quadrants = [
             ('urgent_important', '🔴 عاجل ومهم', 'bg-red-50 border-red-400'),
@@ -267,6 +274,8 @@ HTML_TEMPLATE = """
                                 {% if task[5] != 0 %}
                                     <span class="text-xs font-bold {% if task[5] > 0 %}text-green-600{% else %}text-red-600{% endif %}">({{ task[5] }})</span>
                                 {% endif %}
+                                <!-- زر الحذف -->
+                                <a href="/delete/{{ task[0] }}" onclick="return confirm('هل أنت متأكد من حذف هذه المهمة؟')" class="text-red-400 hover:text-red-600 text-lg font-bold ml-1 delete-btn">✕</a>
                             </div>
                         </div>
                     {% endif %}
@@ -294,6 +303,28 @@ HTML_TEMPLATE = """
 </div>
 
 <script>
+    // ضبط التاريخ والوقت تلقائياً عند فتح الصفحة
+    document.addEventListener('DOMContentLoaded', function() {
+        const now = new Date();
+        
+        // ضبط التاريخ (YYYY-MM-DD)
+        const dateInput = document.getElementById('task_date');
+        if (dateInput) {
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            dateInput.value = `${year}-${month}-${day}`;
+        }
+        
+        // ضبط الوقت (HH:MM)
+        const timeInput = document.getElementById('task_time');
+        if (timeInput) {
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            timeInput.value = `${hours}:${minutes}`;
+        }
+    });
+
     // وضع التركيز: يخفي الأرباع الأخرى ويبقي فقط "عاجل ومهم"
     let focusMode = false;
     function toggleFocus() {
@@ -301,13 +332,11 @@ HTML_TEMPLATE = """
         const container = document.getElementById('app');
         if (focusMode) {
             container.classList.add('focus-mode');
-            // نخفي الأرباع ما عدا الأول
             const quadrants = document.querySelectorAll('.grid .rounded-2xl');
             quadrants.forEach((el, index) => {
                 if (index !== 0) el.style.display = 'none';
                 else el.style.display = 'block';
             });
-            // نضيف خلفية سوداء خفيفة للباقي
         } else {
             container.classList.remove('focus-mode');
             const quadrants = document.querySelectorAll('.grid .rounded-2xl');
@@ -337,7 +366,6 @@ def index():
     # حساب النقاط والتقدم
     total = len(tasks)
     done_count = sum(1 for t in tasks if t[4] == 'done')
-    skipped_count = sum(1 for t in tasks if t[4] == 'skipped')
     progress = int((done_count / total) * 100) if total > 0 else 0
     today_score = sum(t[5] for t in tasks if t[4] in ['done', 'late'])
     
@@ -348,8 +376,7 @@ def index():
         streak=current_streak,
         progress=progress,
         today_score=today_score,
-        ntfy_topic=NTFY_TOPIC,
-        PRIORITY_MAP=PRIORITY_MAP
+        ntfy_topic=NTFY_TOPIC
     )
 
 @app.route('/add', methods=['POST'])
@@ -374,6 +401,11 @@ def add():
         schedule_reminder(task_id, task_date, task_time, description)
     return redirect('/')
 
+@app.route('/delete/<int:task_id>')
+def delete(task_id):
+    delete_task(task_id)
+    return redirect('/')
+
 @app.route('/respond/<int:task_id>/<action>')
 def respond(task_id, action):
     task = get_task(task_id)
@@ -396,7 +428,7 @@ def respond(task_id, action):
     
     score = 0
     status = "pending"
-    # 🔥 المهام العاجلة والمهمة تعطي نقاط مضاعفة
+    # المهام العاجلة والمهمة تعطي نقاط مضاعفة
     base_score = 2 if priority == 'urgent_important' else 1
     
     if action == "done":
