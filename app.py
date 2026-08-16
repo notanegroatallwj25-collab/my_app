@@ -2,19 +2,26 @@ import sqlite3
 import json
 import requests
 from datetime import datetime, date, timedelta
-from flask import Flask, render_template_string, request, redirect, url_for, jsonify
+import pytz  # تحتاج تثبيت: pip install pytz
+from flask import Flask, render_template_string, request, redirect, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
-import threading
-import time
-import logging
+from apscheduler.executors.pool import ThreadPoolExecutor
 import os
+import logging
 
-# ========== الإعدادات ==========
+# ========== الإعدادات الأساسية ==========
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:5000")
-NTFY_TOPIC = "my_tasks_" + datetime.now().strftime("%Y%m%d%H%M%S")
-NTFY_PUBLISH_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
+NTFY_TOPIC = "my_scheduler_fixed"  # موضوع ثابت لتجنب تغيره عند إعادة التشغيل
+NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 DB_NAME = "scheduler.db"
+
+# ========== المنطقة الزمنية المحلية (تعديل حسب منطقتك) ==========
+LOCAL_TZ = pytz.timezone('Asia/Riyadh')  # يمكنك تغييرها حسب موقعك
+
+# ========== إعدادات التسجيل ==========
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # ========== جدول التمارين (Gym Scheduler) ==========
 GYM_SCHEDULE = {
@@ -191,29 +198,82 @@ def mark_reminded(task_id):
 def send_ntfy(message, title="⏰ تذكير", actions=None):
     data = {"topic": NTFY_TOPIC, "title": title, "message": message, "priority": 5, "click": "https://ntfy.sh/"}
     if actions: data["actions"] = actions
-    try: requests.post("https://ntfy.sh/", json=data, timeout=5)
-    except: pass
+    try:
+        response = requests.post("https://ntfy.sh/", json=data, timeout=5)
+        logger.info(f"📤 إرسال إشعار: {title} - {message[:30]}... (status: {response.status_code})")
+    except Exception as e:
+        logger.error(f"❌ فشل إرسال الإشعار: {e}")
 
 # ========== الجدولة ==========
-scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler(timezone=LOCAL_TZ)
 
 def schedule_reminder(task_id, task_date, task_time, desc):
-    remind_dt = datetime.strptime(f"{task_date} {task_time}", "%Y-%m-%d %H:%M")
-    if remind_dt < datetime.now(): return
-    scheduler.add_job(func=send_initial_reminder, trigger=DateTrigger(run_date=remind_dt), args=[task_id, desc], id=f"remind_{task_id}", replace_existing=True)
-    scheduler.add_job(func=send_check_reminder, trigger=DateTrigger(run_date=remind_dt + timedelta(minutes=15)), args=[task_id, desc], id=f"check_{task_id}", replace_existing=True)
+    try:
+        dt_str = f"{task_date} {task_time}"
+        remind_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+        remind_dt = LOCAL_TZ.localize(remind_dt)  # تحديد المنطقة الزمنية
+        now = datetime.now(LOCAL_TZ)
+        
+        if remind_dt < now:
+            logger.warning(f"⏰ وقت التذكير مضى: {desc} في {remind_dt}")
+            return
+        
+        # جدولة التذكير الأول
+        scheduler.add_job(
+            func=send_initial_reminder,
+            trigger=DateTrigger(run_date=remind_dt, timezone=LOCAL_TZ),
+            args=[task_id, desc],
+            id=f"remind_{task_id}",
+            replace_existing=True
+        )
+        logger.info(f"📅 تم جدولة تذكير للمهمة '{desc}' في {remind_dt}")
+        
+        # جدولة التذكير الثاني بعد 15 دقيقة
+        check_dt = remind_dt + timedelta(minutes=15)
+        scheduler.add_job(
+            func=send_check_reminder,
+            trigger=DateTrigger(run_date=check_dt, timezone=LOCAL_TZ),
+            args=[task_id, desc],
+            id=f"check_{task_id}",
+            replace_existing=True
+        )
+        logger.info(f"⏳ تم جدولة تذكير المتابعة للمهمة '{desc}' في {check_dt}")
+        
+    except Exception as e:
+        logger.error(f"❌ خطأ في جدولة المهمة {desc}: {e}")
 
 def send_initial_reminder(task_id, desc):
-    mark_reminded(task_id)
-    actions = [
-        {"id": "done", "label": "✅ أنجزتها", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/done"},
-        {"id": "late", "label": "❌ لا", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/late"},
-        {"id": "skip", "label": "⏭ تخطي", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/skip"}
-    ]
-    send_ntfy(f"🔔 حان وقت الإنجاز:\n📝 {desc}", "⏰ وقت التنفيذ!", actions)
+    try:
+        logger.info(f"🔔 تنفيذ تذكير للمهمة: {desc} (ID: {task_id})")
+        mark_reminded(task_id)
+        actions = [
+            {"id": "done", "label": "✅ أنجزتها", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/done"},
+            {"id": "late", "label": "❌ لا", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/late"},
+            {"id": "skip", "label": "⏭ تخطي", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/skip"}
+        ]
+        send_ntfy(f"🔔 حان وقت الإنجاز:\n📝 {desc}", "⏰ وقت التنفيذ!", actions)
+    except Exception as e:
+        logger.error(f"❌ فشل في إرسال التذكير الأول: {e}")
 
 def send_check_reminder(task_id, desc):
-    send_ntfy(f"⏳ مضت 15 دقيقة على {desc}.\nرد عبر الواجهة.", "⚠️ استفسار")
+    try:
+        logger.info(f"⏳ تنفيذ تذكير المتابعة للمهمة: {desc} (ID: {task_id})")
+        send_ntfy(f"⏳ مضت 15 دقيقة على {desc}.\nرد عبر الواجهة.", "⚠️ استفسار")
+    except Exception as e:
+        logger.error(f"❌ فشل في إرسال تذكير المتابعة: {e}")
+
+def reschedule_pending_tasks():
+    """إعادة جدولة المهام المعلقة عند بدء التشغيل"""
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending' AND reminded_at IS NULL", (today,))
+    tasks = c.fetchall()
+    conn.close()
+    
+    for task_id, task_date, task_time, desc in tasks:
+        schedule_reminder(task_id, task_date, task_time, desc)
+        logger.info(f"🔄 إعادة جدولة المهمة المعلقة: {desc}")
 
 # ========== تطبيق Flask ==========
 app = Flask(__name__)
@@ -240,7 +300,6 @@ HTML_TEMPLATE = """
         .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); }
         .task-card { transition: all 0.2s ease; }
         .task-card:hover { transform: scale(1.01); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); }
-        .priority-border { border-right: 6px solid; }
         .fade-in { animation: fadeIn 0.5s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .streak-fire { animation: pulse 1.5s infinite; }
@@ -257,7 +316,7 @@ HTML_TEMPLATE = """
 <body class="bg-gradient-to-br from-slate-50 via-white to-blue-50 min-h-screen p-4 md:p-8">
 
 <div class="max-w-6xl mx-auto" id="app">
-    <!-- الهيدر + الستريك + التقدم -->
+    <!-- الهيدر -->
     <div class="glass rounded-3xl shadow-xl p-6 mb-6 border border-white/30 fade-in">
         <div class="flex flex-col md:flex-row justify-between items-center gap-4">
             <div>
@@ -284,7 +343,7 @@ HTML_TEMPLATE = """
             <span>{{ progress }}% مكتمل</span>
             <span>100%</span>
         </div>
-        <!-- علامة X الكبيرة -->
+        <!-- علامة X -->
         <div class="mt-2 text-center">
             {% if progress == 100 and tasks|length > 0 %}
                 <span class="inline-block bg-emerald-100 text-emerald-800 px-6 py-1 rounded-full text-sm font-bold border border-emerald-300">✅ اليوم مكتمل (X)</span>
@@ -296,7 +355,7 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- إضافة مهمة جديدة -->
+    <!-- إضافة مهمة -->
     <div class="glass rounded-3xl shadow-xl p-6 mb-6 border border-white/30 fade-in">
         <h2 class="text-xl font-bold text-slate-700 mb-4">➕ إضافة مهمة</h2>
         <form method="POST" action="/add" class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -320,7 +379,7 @@ HTML_TEMPLATE = """
         </a>
     </div>
 
-    <!-- مصفوفة الأربعة أرباع -->
+    <!-- المصفوفة -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 fade-in">
         {% set quadrants = [
             ('urgent_important', '🔴 عاجل ومهم', 'bg-red-50 border-red-400'),
@@ -354,7 +413,6 @@ HTML_TEMPLATE = """
                                 {% if task[5] != 0 %}
                                     <span class="text-xs font-bold {% if task[5] > 0 %}text-green-600{% else %}text-red-600{% endif %}">({{ task[5] }})</span>
                                 {% endif %}
-                                <!-- زر الحذف -->
                                 <a href="/delete/{{ task[0] }}" onclick="return confirm('هل أنت متأكد من حذف هذه المهمة؟')" class="text-red-400 hover:text-red-600 text-lg font-bold ml-1 delete-btn">✕</a>
                             </div>
                         </div>
@@ -368,7 +426,7 @@ HTML_TEMPLATE = """
         {% endfor %}
     </div>
 
-    <!-- أزرار التحكم السريعة -->
+    <!-- أزرار -->
     <div class="flex flex-wrap gap-4 mt-6 justify-center fade-in">
         <form action="/reset_streak" method="POST">
             <button type="submit" class="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-2 rounded-xl font-bold text-sm transition">🔄 إعادة ضبط الستريك</button>
@@ -376,17 +434,15 @@ HTML_TEMPLATE = """
         <button onclick="toggleFocus()" class="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-2 rounded-xl font-bold text-sm transition shadow-lg shadow-indigo-200">🎯 وضع التركيز (عاجل ومهم فقط)</button>
     </div>
 
-    <!-- إعدادات NTFY -->
+    <!-- NTFY -->
     <div class="mt-6 glass rounded-3xl shadow-xl p-4 border border-white/30 text-center fade-in">
         <p class="text-sm text-slate-500">📲 اشترك في موضوع NTFY: <span class="font-mono font-bold text-indigo-600 bg-white px-3 py-1 rounded-full">{{ ntfy_topic }}</span></p>
     </div>
 </div>
 
 <script>
-    // ضبط التاريخ والوقت تلقائياً عند فتح الصفحة
     document.addEventListener('DOMContentLoaded', function() {
         const now = new Date();
-        
         const dateInput = document.getElementById('task_date');
         if (dateInput) {
             const year = now.getFullYear();
@@ -394,7 +450,6 @@ HTML_TEMPLATE = """
             const day = String(now.getDate()).padStart(2, '0');
             dateInput.value = `${year}-${month}-${day}`;
         }
-        
         const timeInput = document.getElementById('task_time');
         if (timeInput) {
             const hours = String(now.getHours()).padStart(2, '0');
@@ -426,7 +481,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# ========== صفحة الجيم (Gym Scheduler) ==========
 GYM_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -459,7 +513,6 @@ GYM_HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- عرض الأيام -->
     {% for day_name, day_data in gym_schedule.items() %}
     <div class="glass rounded-3xl shadow-xl p-6 mb-6 border border-white/30 fade-in">
         <h2 class="text-2xl font-bold text-slate-700 mb-4">{{ day_data.emoji }} {{ day_name }}</h2>
@@ -478,7 +531,6 @@ GYM_HTML_TEMPLATE = """
     </div>
     {% endfor %}
 
-    <!-- زر العودة -->
     <div class="text-center mt-6">
         <a href="/" class="back-btn text-white font-bold py-3 px-8 rounded-xl transition shadow-lg shadow-purple-200 inline-block">
             ⬅️ العودة للرئيسية
@@ -490,9 +542,9 @@ GYM_HTML_TEMPLATE = """
 </html>
 """
 
+# ========== Routes ==========
 @app.route('/')
 def index():
-    # تحديث الستريك
     current_streak = get_streak()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -521,10 +573,7 @@ def index():
 
 @app.route('/gym')
 def gym():
-    return render_template_string(
-        GYM_HTML_TEMPLATE,
-        gym_schedule=GYM_SCHEDULE
-    )
+    return render_template_string(GYM_HTML_TEMPLATE, gym_schedule=GYM_SCHEDULE)
 
 @app.route('/add', methods=['POST'])
 def add():
@@ -532,11 +581,13 @@ def add():
     task_time = request.form.get('task_time')
     description = request.form.get('description')
     priority = request.form.get('priority', 'urgent_important')
-    if not all([task_date, task_time, description]): return redirect('/')
+    if not all([task_date, task_time, description]):
+        return redirect('/')
     try:
         datetime.strptime(task_date, "%Y-%m-%d")
         datetime.strptime(task_time, "%H:%M")
-    except: return redirect('/')
+    except:
+        return redirect('/')
     
     add_task(task_date, task_time, description, priority)
     if task_date == date.today().isoformat():
@@ -557,7 +608,7 @@ def delete(task_id):
 def respond(task_id, action):
     task = get_task(task_id)
     if not task: return "غير موجود", 404
-    now = datetime.now()
+    now = datetime.now(LOCAL_TZ)
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT reminded_at, priority FROM tasks WHERE id=?", (task_id,))
@@ -571,7 +622,8 @@ def respond(task_id, action):
         try:
             reminded_dt = datetime.fromisoformat(reminded_at)
             delay_minutes = (now - reminded_dt).total_seconds() / 60
-        except: pass
+        except:
+            pass
     
     score = 0
     status = "pending"
@@ -604,16 +656,19 @@ def reset_streak_route():
     reset_streak()
     return redirect('/')
 
+# ========== التشغيل الرئيسي ==========
 if __name__ == '__main__':
     init_db()
+    
+    # إعداد المجدول مع إعدادات إضافية
+    scheduler.add_executor('default', ThreadPoolExecutor(max_workers=10))
     scheduler.start()
-    today = date.today().isoformat()
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending' AND reminded_at IS NULL", (today,))
-    for task_id, task_date, task_time, desc in c.fetchall():
-        schedule_reminder(task_id, task_date, task_time, desc)
-    conn.close()
-    print(f"🚀 الخادم شغال على: {BASE_URL}")
-    print(f"📲 موضوع NTFY: {NTFY_TOPIC}")
+    logger.info("🚀 بدء تشغيل المجدول...")
+    
+    # إعادة جدولة المهام المعلقة
+    reschedule_pending_tasks()
+    
+    # تشغيل الخادم
+    logger.info(f"🚀 الخادم شغال على: {BASE_URL}")
+    logger.info(f"📲 موضوع NTFY: {NTFY_TOPIC}")
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
