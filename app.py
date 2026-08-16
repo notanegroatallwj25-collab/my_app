@@ -219,7 +219,7 @@ def schedule_reminder(task_id, task_date, task_time, desc):
         # إذا كان الوقت قد مضى بأقل من دقيقة، أرسل التذكير فوراً
         if remind_dt < now:
             diff_seconds = (now - remind_dt).total_seconds()
-            if diff_seconds <= 60:  # أقل من دقيقة
+            if diff_seconds <= 60:
                 logger.info(f"⏰ الوقت مضى بـ {diff_seconds:.0f} ثانية، سيتم إرسال التذكير فوراً")
                 send_initial_reminder(task_id, desc)
                 return
@@ -255,10 +255,15 @@ def send_initial_reminder(task_id, desc):
     try:
         logger.info(f"🔔 تنفيذ تذكير للمهمة: {desc} (ID: {task_id})")
         mark_reminded(task_id)
+        
+        # تأكد من أن BASE_URL صحيح
+        base = os.environ.get("BASE_URL", "http://localhost:5000")
+        logger.info(f"📍 BASE_URL المستخدم: {base}")
+        
         actions = [
-            {"id": "done", "label": "✅ أنجزتها", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/done"},
-            {"id": "late", "label": "❌ لا", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/late"},
-            {"id": "skip", "label": "⏭ تخطي", "action": "http", "url": f"{BASE_URL}/respond/{task_id}/skip"}
+            {"id": "done", "label": "✅ أنجزتها", "action": "http", "url": f"{base}/respond/{task_id}/done"},
+            {"id": "late", "label": "❌ لا", "action": "http", "url": f"{base}/respond/{task_id}/late"},
+            {"id": "skip", "label": "⏭ تخطي", "action": "http", "url": f"{base}/respond/{task_id}/skip"}
         ]
         send_ntfy(f"🔔 حان وقت الإنجاز:\n📝 {desc}", "⏰ وقت التنفيذ!", actions)
     except Exception as e:
