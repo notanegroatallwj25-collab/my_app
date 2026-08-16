@@ -93,24 +93,12 @@ GYM_SCHEDULE = {
     }
 }
 
-# ========== ترقية قاعدة البيانات ==========
-def upgrade_db():
-    """إضافة أعمدة جديدة إذا لم تكن موجودة"""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        # التحقق من وجود عمود repeat
-        c.execute("SELECT repeat FROM tasks LIMIT 1")
-    except sqlite3.OperationalError:
-        c.execute("ALTER TABLE tasks ADD COLUMN repeat TEXT DEFAULT 'none'")
-        logger.info("✅ تم إضافة عمود repeat إلى قاعدة البيانات")
-    conn.commit()
-    conn.close()
-
-# ========== قاعدة البيانات ==========
+# ========== تهيئة وترقية قاعدة البيانات ==========
 def init_db():
+    """إنشاء الجداول إذا لم تكن موجودة"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # جدول tasks مع عمود repeat منذ البداية
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_date TEXT,
@@ -119,7 +107,8 @@ def init_db():
         priority TEXT DEFAULT 'urgent_important',
         status TEXT DEFAULT 'pending',
         score INTEGER DEFAULT 0,
-        reminded_at TEXT NULL
+        reminded_at TEXT NULL,
+        repeat TEXT DEFAULT 'none'
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS streak (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,9 +120,23 @@ def init_db():
         c.execute("INSERT INTO streak (last_active_date, count) VALUES (?, ?)", (date.today().isoformat(), 0))
     conn.commit()
     conn.close()
-    # بعد إنشاء الجدول، نقوم بترقيته
+    # ننفذ الترقية للتأكد من وجود العمود (في حال كان الجدول قديماً)
     upgrade_db()
 
+def upgrade_db():
+    """إضافة عمود repeat إذا لم يكن موجوداً (للتوافق مع الإصدارات القديمة)"""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # التحقق من وجود العمود repeat
+    c.execute("PRAGMA table_info(tasks)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'repeat' not in columns:
+        c.execute("ALTER TABLE tasks ADD COLUMN repeat TEXT DEFAULT 'none'")
+        logger.info("✅ تم إضافة عمود repeat إلى قاعدة البيانات")
+    conn.commit()
+    conn.close()
+
+# ========== دوال قاعدة البيانات ==========
 def get_streak():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -164,10 +167,19 @@ def update_streak(new_count):
     conn.close()
 
 def add_task(date_str, time_str, desc, priority, repeat='none'):
+    """إضافة مهمة جديدة مع التحقق من وجود العمود repeat"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("INSERT INTO tasks (task_date, task_time, description, priority, repeat) VALUES (?,?,?,?,?)", 
-              (date_str, time_str, desc, priority, repeat))
+    # التحقق من وجود العمود repeat مرة أخرى (للتأكد)
+    c.execute("PRAGMA table_info(tasks)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'repeat' in columns:
+        c.execute("INSERT INTO tasks (task_date, task_time, description, priority, repeat) VALUES (?,?,?,?,?)", 
+                  (date_str, time_str, desc, priority, repeat))
+    else:
+        # إذا لم يكن موجوداً (حالة نادرة) ندرج بدون repeat
+        c.execute("INSERT INTO tasks (task_date, task_time, description, priority) VALUES (?,?,?,?)", 
+                  (date_str, time_str, desc, priority))
     conn.commit()
     conn.close()
 
@@ -182,7 +194,6 @@ def get_today_tasks():
         # إذا كان العمود repeat غير موجود (للأمان)
         c.execute("SELECT id, task_time, description, priority, status, score FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
         data = c.fetchall()
-        # نحول البيانات لإضافة عمود repeat وهمي
         data = [list(row) + ['none'] for row in data]
     conn.close()
     return data
@@ -409,7 +420,6 @@ def reschedule_pending_tasks():
     try:
         c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending' AND reminded_at IS NULL", (today,))
     except:
-        # إذا كان العمود reminded_at غير موجود (للأمان)
         c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending'", (today,))
     tasks = c.fetchall()
     conn.close()
@@ -881,25 +891,31 @@ def clean_old_tasks():
 
 @app.route('/add', methods=['POST'])
 def add():
-    task_date = request.form.get('task_date')
-    task_time = request.form.get('task_time')
-    description = request.form.get('description')
-    priority = request.form.get('priority', 'urgent_important')
-    repeat = request.form.get('repeat', 'none')
-    if not all([task_date, task_time, description]): return redirect('/')
     try:
+        task_date = request.form.get('task_date')
+        task_time = request.form.get('task_time')
+        description = request.form.get('description')
+        priority = request.form.get('priority', 'urgent_important')
+        repeat = request.form.get('repeat', 'none')
+        if not all([task_date, task_time, description]):
+            return redirect('/')
+        # تحقق من صحة التاريخ والوقت
         datetime.strptime(task_date, "%Y-%m-%d")
         datetime.strptime(task_time, "%H:%M")
-    except: return redirect('/')
-    add_task(task_date, task_time, description, priority, repeat)
-    if task_date == date.today().isoformat():
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute("SELECT id FROM tasks WHERE task_date=? AND task_time=? AND description=? ORDER BY id DESC LIMIT 1", (task_date, task_time, description))
-        task_id = c.fetchone()[0]
-        conn.close()
-        schedule_reminder(task_id, task_date, task_time, description)
-    return redirect('/')
+        # إضافة المهمة
+        add_task(task_date, task_time, description, priority, repeat)
+        # جدولة التذكير إذا كانت المهمة لليوم
+        if task_date == date.today().isoformat():
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            c.execute("SELECT id FROM tasks WHERE task_date=? AND task_time=? AND description=? ORDER BY id DESC LIMIT 1", (task_date, task_time, description))
+            task_id = c.fetchone()[0]
+            conn.close()
+            schedule_reminder(task_id, task_date, task_time, description)
+        return redirect('/')
+    except Exception as e:
+        logger.error(f"❌ خطأ في إضافة المهمة: {e}")
+        return redirect('/')
 
 @app.route('/delete/<int:task_id>')
 def delete(task_id):
