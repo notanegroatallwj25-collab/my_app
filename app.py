@@ -93,6 +93,20 @@ GYM_SCHEDULE = {
     }
 }
 
+# ========== ترقية قاعدة البيانات ==========
+def upgrade_db():
+    """إضافة أعمدة جديدة إذا لم تكن موجودة"""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        # التحقق من وجود عمود repeat
+        c.execute("SELECT repeat FROM tasks LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE tasks ADD COLUMN repeat TEXT DEFAULT 'none'")
+        logger.info("✅ تم إضافة عمود repeat إلى قاعدة البيانات")
+    conn.commit()
+    conn.close()
+
 # ========== قاعدة البيانات ==========
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -105,8 +119,7 @@ def init_db():
         priority TEXT DEFAULT 'urgent_important',
         status TEXT DEFAULT 'pending',
         score INTEGER DEFAULT 0,
-        reminded_at TEXT NULL,
-        repeat TEXT DEFAULT 'none'
+        reminded_at TEXT NULL
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS streak (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,6 +131,8 @@ def init_db():
         c.execute("INSERT INTO streak (last_active_date, count) VALUES (?, ?)", (date.today().isoformat(), 0))
     conn.commit()
     conn.close()
+    # بعد إنشاء الجدول، نقوم بترقيته
+    upgrade_db()
 
 def get_streak():
     conn = sqlite3.connect(DB_NAME)
@@ -160,15 +175,30 @@ def get_today_tasks():
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, task_time, description, priority, status, score, repeat FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
-    data = c.fetchall()
+    try:
+        c.execute("SELECT id, task_time, description, priority, status, score, repeat FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
+        data = c.fetchall()
+    except sqlite3.OperationalError:
+        # إذا كان العمود repeat غير موجود (للأمان)
+        c.execute("SELECT id, task_time, description, priority, status, score FROM tasks WHERE task_date=? ORDER BY priority, task_time", (today,))
+        data = c.fetchall()
+        # نحول البيانات لإضافة عمود repeat وهمي
+        data = [list(row) + ['none'] for row in data]
     conn.close()
     return data
 
 def get_task(task_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT task_date, task_time, description, priority, status, repeat FROM tasks WHERE id=?", (task_id,))
+    try:
+        c.execute("SELECT task_date, task_time, description, priority, status, repeat FROM tasks WHERE id=?", (task_id,))
+    except sqlite3.OperationalError:
+        c.execute("SELECT task_date, task_time, description, priority, status FROM tasks WHERE id=?", (task_id,))
+        data = c.fetchone()
+        if data:
+            data = list(data) + ['none']
+        conn.close()
+        return data
     data = c.fetchone()
     conn.close()
     return data
@@ -194,6 +224,17 @@ def delete_task(task_id):
     c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
     conn.commit()
     conn.close()
+
+def delete_old_tasks():
+    """حذف جميع المهام التي تاريخها أقل من اليوم"""
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE task_date < ?", (today,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
 
 def mark_reminded(task_id):
     conn = sqlite3.connect(DB_NAME)
@@ -365,7 +406,11 @@ def reschedule_pending_tasks():
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending' AND reminded_at IS NULL", (today,))
+    try:
+        c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending' AND reminded_at IS NULL", (today,))
+    except:
+        # إذا كان العمود reminded_at غير موجود (للأمان)
+        c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending'", (today,))
     tasks = c.fetchall()
     conn.close()
     for task_id, task_date, task_time, desc in tasks:
@@ -382,7 +427,7 @@ PRIORITY_MAP = {
     'not_urgent_not_important': {'label': '⚪ غير عاجل وغير مهم', 'color': 'bg-gray-50 border-gray-300', 'badge': 'trivial'}
 }
 
-# ========== قوالب HTML المتطورة ==========
+# ========== قوالب HTML ==========
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -410,18 +455,15 @@ HTML_TEMPLATE = """
         .action-btn:hover { transform: scale(1.1); }
         .stat-card { transition: all 0.3s ease; }
         .stat-card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px -8px rgba(0,0,0,0.12); }
-        .calendar-day { transition: all 0.2s ease; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700; }
-        .calendar-day:hover { transform: scale(1.1); }
-        .calendar-day.done { background: #22c55e; color: white; }
-        .calendar-day.today { border: 3px solid #3b82f6; }
-        .calendar-day.empty { visibility: hidden; }
+        .clean-btn { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .clean-btn:hover { transform: scale(1.05); box-shadow: 0 12px 30px -8px #f5576c; }
     </style>
 </head>
 <body class="min-h-screen p-4 md:p-8">
 
 <div class="max-w-7xl mx-auto" id="app">
 
-    <!-- ===== الهيدر الكبير ===== -->
+    <!-- ===== الهيدر ===== -->
     <div class="glass rounded-3xl shadow-xl p-6 md:p-8 mb-6 border border-white/30 fade-in">
         <div class="flex flex-col md:flex-row justify-between items-center gap-4">
             <div>
@@ -467,7 +509,7 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- ===== إضافة مهمة متطورة ===== -->
+    <!-- ===== إضافة مهمة ===== -->
     <div class="glass rounded-3xl shadow-xl p-6 md:p-8 mb-6 border border-white/30 fade-in">
         <h2 class="text-2xl font-bold text-slate-700 mb-4"><i class="fas fa-plus-circle text-indigo-600"></i> إضافة مهمة جديدة</h2>
         <form method="POST" action="/add" class="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -500,6 +542,9 @@ HTML_TEMPLATE = """
         <button onclick="toggleFocus()" class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg shadow-indigo-200">
             <i class="fas fa-bullseye"></i> وضع التركيز
         </button>
+        <a href="/clean" onclick="return confirm('⚠️ سيتم حذف جميع المهام القديمة (قبل اليوم الحالي). هل أنت متأكد؟')" class="bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg shadow-red-200">
+            <i class="fas fa-broom"></i> حذف المهام القديمة
+        </a>
         <form action="/reset_streak" method="POST" class="inline">
             <button type="submit" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 px-6 rounded-xl transition">
                 <i class="fas fa-undo"></i> إعادة ضبط الستريك
@@ -828,6 +873,12 @@ def edit(task_id):
         return redirect('/')
     return render_template_string(EDIT_TEMPLATE, task=task)
 
+@app.route('/clean')
+def clean_old_tasks():
+    deleted = delete_old_tasks()
+    send_ntfy(f"تم حذف {deleted} مهمة قديمة", "🧹 تنظيف")
+    return redirect('/')
+
 @app.route('/add', methods=['POST'])
 def add():
     task_date = request.form.get('task_date')
@@ -893,7 +944,7 @@ def respond(task_id, action):
     if status == "done":
         current = get_streak()
         update_streak(current + 1)
-        handle_repeat(task_id)  # توليد مهمة متكررة
+        handle_repeat(task_id)
     send_ntfy(f"✅ تم تسجيل ردك على '{task[2]}' كـ {status} (نقاط: {score})", "تم التحديث")
     return redirect('/')
 
