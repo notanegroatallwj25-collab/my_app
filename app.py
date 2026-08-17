@@ -164,7 +164,6 @@ def update_streak(new_count):
 def add_task(date_str, time_str, desc, priority, repeat='none'):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # التحقق من وجود العمود repeat
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
     if 'repeat' in columns:
@@ -230,14 +229,16 @@ def delete_task(task_id):
     logger.info(f"🗑️ تم حذف المهمة {task_id}")
 
 def delete_old_tasks():
+    """حذف جميع المهام التي تاريخها أقل من اليوم الحالي"""
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # حذف المهام التي تاريخها < اليوم
     c.execute("DELETE FROM tasks WHERE task_date < ?", (today,))
     deleted = c.rowcount
     conn.commit()
     conn.close()
-    logger.info(f"🧹 تم حذف {deleted} مهمة قديمة")
+    logger.info(f"🧹 تم حذف {deleted} مهمة قديمة (تاريخ أقل من {today})")
     return deleted
 
 def mark_reminded(task_id):
@@ -312,7 +313,6 @@ DAILY_TASKS = [
 ]
 
 def add_daily_tasks():
-    """إضافة المهام اليومية التلقائية باستخدام add_task لتجنب مشكلة العمود repeat"""
     today = date.today().isoformat()
     added = 0
     conn = sqlite3.connect(DB_NAME)
@@ -321,7 +321,6 @@ def add_daily_tasks():
         c.execute("SELECT COUNT(*) FROM tasks WHERE task_date=? AND task_time=? AND description=?", 
                   (today, task["time"], task["desc"]))
         if c.fetchone()[0] == 0:
-            # استخدام add_task التي تتعامل مع غياب العمود repeat
             add_task(today, task["time"], task["desc"], task["priority"], task["repeat"])
             added += 1
     conn.close()
@@ -408,7 +407,7 @@ def reschedule_pending_tasks():
 # ========== تطبيق Flask ==========
 app = Flask(__name__)
 
-# قالب HTML (بنفس الشكل السابق)
+# قالب HTML مع تصحيح أسماء الأولويات
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -482,7 +481,7 @@ HTML_TEMPLATE = """
     <div class="flex flex-wrap gap-3 mb-6">
         <a href="/gym" class="bg-pink-500 text-white px-6 py-2 rounded-xl">🏋️ جدول التمارين</a>
         <button onclick="toggleFocus()" class="bg-indigo-500 text-white px-6 py-2 rounded-xl">🎯 تركيز</button>
-        <a href="/clean" onclick="return confirm('حذف المهام القديمة؟')" class="bg-red-500 text-white px-6 py-2 rounded-xl">🧹 حذف القديم</a>
+        <a href="/clean" onclick="return confirm('⚠️ سيتم حذف جميع المهام التي تاريخها قبل اليوم الحالي. هل أنت متأكد؟')" class="bg-red-500 text-white px-6 py-2 rounded-xl">🧹 حذف القديم</a>
         <a href="/repair_db" class="bg-yellow-500 text-white px-6 py-2 rounded-xl">🔧 إصلاح قاعدة البيانات</a>
         <a href="/add_daily_tasks" class="daily-btn text-white px-6 py-2 rounded-xl font-bold">⭐ إضافة المهام اليومية التلقائية</a>
         <form action="/reset_streak" method="POST" class="inline"><button class="bg-slate-300 px-6 py-2 rounded-xl">🔄 إعادة الستريك</button></form>
@@ -490,7 +489,12 @@ HTML_TEMPLATE = """
 
     <!-- المهام -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {% for key, label, color in [('urgent_important','🔴 عاجل ومهم','red'), ('not_urgent_important','🔵 غير عاجل مهم','blue'), ('urgent_not_important','🟡 عاجل غير مهم','yellow'), ('not_urgent_not_important','⚪ غير عاجل غير مهم','gray')] %}
+        {% for key, label, color in [
+            ('urgent_important', '🔴 عاجل ومهم', 'red'),
+            ('not_urgent_important', '🔵 غير عاجل مهم', 'blue'),
+            ('urgent_not_important', '🟡 عاجل غير مهم', 'yellow'),
+            ('not_urgent_not_important', '⚪ غير عاجل غير مهم', 'gray')
+        ] %}
         <div class="glass rounded-2xl p-4 border-2 border-{{ color }}-300">
             <h3 class="font-bold">{{ label }} ({{ tasks|selectattr('3','equalto',key)|list|length }})</h3>
             {% for task in tasks if task[3]==key %}
@@ -672,7 +676,7 @@ def delete(task_id):
 @app.route('/clean')
 def clean():
     deleted = delete_old_tasks()
-    send_ntfy(f"تم حذف {deleted} مهمة قديمة", "🧹 تنظيف")
+    send_ntfy(f"تم حذف {deleted} مهمة قديمة (قبل اليوم)", "🧹 تنظيف")
     return redirect('/')
 
 @app.route('/repair_db')
@@ -683,7 +687,7 @@ def repair_db_route():
 
 @app.route('/add_daily_tasks')
 def add_daily_tasks_route():
-    repair_db()  # تأكد من وجود العمود repeat
+    repair_db()
     added = add_daily_tasks()
     send_ntfy(f"تم إضافة {added} مهمة تلقائية لليوم", "⭐ مهام يومية")
     return redirect('/')
