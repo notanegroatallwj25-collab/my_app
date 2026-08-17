@@ -3,7 +3,7 @@ import json
 import requests
 from datetime import datetime, date, timedelta
 import pytz
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, flash
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -229,7 +229,7 @@ def delete_task(task_id):
     logger.info(f"🗑️ تم حذف المهمة {task_id}")
 
 def delete_old_tasks():
-    """حذف جميع المهام التي تاريخها أقل من اليوم الحالي"""
+    """حذف جميع المهام التي تاريخها أقل من اليوم الحالي (أي المهام القديمة)"""
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -239,6 +239,17 @@ def delete_old_tasks():
     conn.commit()
     conn.close()
     logger.info(f"🧹 تم حذف {deleted} مهمة قديمة (تاريخ أقل من {today})")
+    return deleted
+
+def delete_completed_tasks():
+    """حذف جميع المهام المنجزة (status='done') بغض النظر عن التاريخ"""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE status='done'")
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    logger.info(f"🗑️ تم حذف {deleted} مهمة منجزة")
     return deleted
 
 def mark_reminded(task_id):
@@ -407,7 +418,7 @@ def reschedule_pending_tasks():
 # ========== تطبيق Flask ==========
 app = Flask(__name__)
 
-# قالب HTML مع تصحيح أسماء الأولويات
+# قالب HTML مع تحسين الأزرار
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -425,6 +436,8 @@ HTML_TEMPLATE = """
         .action-btn { font-size: 13px; padding: 2px 10px; border-radius: 20px; }
         .daily-btn { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
         .daily-btn:hover { transform: scale(1.05); box-shadow: 0 12px 30px -8px #f5576c; }
+        .clean-btn { background: linear-gradient(135deg, #ff6b6b, #ee5a24); }
+        .clean-btn:hover { transform: scale(1.05); }
     </style>
 </head>
 <body>
@@ -481,7 +494,10 @@ HTML_TEMPLATE = """
     <div class="flex flex-wrap gap-3 mb-6">
         <a href="/gym" class="bg-pink-500 text-white px-6 py-2 rounded-xl">🏋️ جدول التمارين</a>
         <button onclick="toggleFocus()" class="bg-indigo-500 text-white px-6 py-2 rounded-xl">🎯 تركيز</button>
-        <a href="/clean" onclick="return confirm('⚠️ سيتم حذف جميع المهام التي تاريخها قبل اليوم الحالي. هل أنت متأكد؟')" class="bg-red-500 text-white px-6 py-2 rounded-xl">🧹 حذف القديم</a>
+        <!-- زر حذف القديم مع تأكيد وتحسين -->
+        <a href="/clean" onclick="return confirm('⚠️ سيتم حذف جميع المهام التي تاريخها قبل اليوم الحالي. هل أنت متأكد؟')" class="clean-btn text-white px-6 py-2 rounded-xl font-bold">🧹 حذف القديم</a>
+        <!-- زر حذف المنجزات -->
+        <a href="/clean_done" onclick="return confirm('⚠️ سيتم حذف جميع المهام المنجزة. هل أنت متأكد؟')" class="bg-red-600 text-white px-6 py-2 rounded-xl font-bold">🗑️ حذف المنجز</a>
         <a href="/repair_db" class="bg-yellow-500 text-white px-6 py-2 rounded-xl">🔧 إصلاح قاعدة البيانات</a>
         <a href="/add_daily_tasks" class="daily-btn text-white px-6 py-2 rounded-xl font-bold">⭐ إضافة المهام اليومية التلقائية</a>
         <form action="/reset_streak" method="POST" class="inline"><button class="bg-slate-300 px-6 py-2 rounded-xl">🔄 إعادة الستريك</button></form>
@@ -677,6 +693,12 @@ def delete(task_id):
 def clean():
     deleted = delete_old_tasks()
     send_ntfy(f"تم حذف {deleted} مهمة قديمة (قبل اليوم)", "🧹 تنظيف")
+    return redirect('/')
+
+@app.route('/clean_done')
+def clean_done():
+    deleted = delete_completed_tasks()
+    send_ntfy(f"تم حذف {deleted} مهمة منجزة", "🗑️ حذف المنجز")
     return redirect('/')
 
 @app.route('/repair_db')
