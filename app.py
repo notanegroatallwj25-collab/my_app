@@ -17,11 +17,24 @@ LOCAL_TZ = pytz.timezone('Asia/Hebron')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ========== تهيئة قاعدة البيانات ==========
+# ========== تهيئة وترقية قاعدة البيانات ==========
+def upgrade_db():
+    """إضافة عمود repeat إذا لم يكن موجوداً"""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    # التحقق من وجود العمود
+    c.execute("PRAGMA table_info(tasks)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'repeat' not in columns:
+        c.execute("ALTER TABLE tasks ADD COLUMN repeat TEXT DEFAULT 'none'")
+        logger.info("✅ تم إضافة عمود repeat إلى قاعدة البيانات")
+    conn.commit()
+    conn.close()
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # إنشاء جدول المهام
+    # إنشاء الجدول مع العمود الجديد
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_date TEXT NOT NULL,
@@ -33,7 +46,6 @@ def init_db():
         reminded_at TEXT,
         repeat TEXT DEFAULT 'none'
     )''')
-    # إنشاء جدول الستريك
     c.execute('''CREATE TABLE IF NOT EXISTS streak (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         last_active_date TEXT,
@@ -44,6 +56,8 @@ def init_db():
         c.execute("INSERT INTO streak (last_active_date, count) VALUES (?, ?)", (date.today().isoformat(), 0))
     conn.commit()
     conn.close()
+    # ترقية القاعدة
+    upgrade_db()
     logger.info("✅ قاعدة البيانات جاهزة")
 
 # ========== دوال قاعدة البيانات ==========
@@ -79,8 +93,15 @@ def update_streak(new_count):
 def add_task(date_str, time_str, desc, priority, repeat='none'):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("INSERT INTO tasks (task_date, task_time, description, priority, repeat) VALUES (?,?,?,?,?)",
-              (date_str, time_str, desc, priority, repeat))
+    # تأكد من وجود العمود (للتأمين)
+    c.execute("PRAGMA table_info(tasks)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'repeat' in columns:
+        c.execute("INSERT INTO tasks (task_date, task_time, description, priority, repeat) VALUES (?,?,?,?,?)",
+                  (date_str, time_str, desc, priority, repeat))
+    else:
+        c.execute("INSERT INTO tasks (task_date, task_time, description, priority) VALUES (?,?,?,?)",
+                  (date_str, time_str, desc, priority))
     conn.commit()
     conn.close()
     logger.info(f"✅ أضيفت: {desc} في {time_str}")
@@ -89,15 +110,29 @@ def get_today_tasks():
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, task_time, description, priority, status, score, repeat FROM tasks WHERE task_date=? ORDER BY task_time", (today,))
-    data = c.fetchall()
+    try:
+        c.execute("SELECT id, task_time, description, priority, status, score, repeat FROM tasks WHERE task_date=? ORDER BY task_time", (today,))
+        data = c.fetchall()
+    except sqlite3.OperationalError:
+        # إذا كان العمود غير موجود (حالة نادرة)
+        c.execute("SELECT id, task_time, description, priority, status, score FROM tasks WHERE task_date=? ORDER BY task_time", (today,))
+        data = c.fetchall()
+        data = [list(row) + ['none'] for row in data]
     conn.close()
     return data
 
 def get_task(task_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT task_date, task_time, description, priority, status, repeat FROM tasks WHERE id=?", (task_id,))
+    try:
+        c.execute("SELECT task_date, task_time, description, priority, status, repeat FROM tasks WHERE id=?", (task_id,))
+    except:
+        c.execute("SELECT task_date, task_time, description, priority, status FROM tasks WHERE id=?", (task_id,))
+        data = c.fetchone()
+        if data:
+            data = list(data) + ['none']
+        conn.close()
+        return data
     data = c.fetchone()
     conn.close()
     return data
@@ -182,8 +217,8 @@ def add_daily_tasks():
         c.execute("SELECT COUNT(*) FROM tasks WHERE task_date=? AND task_time=? AND description=?", 
                   (today, task["time"], task["desc"]))
         if c.fetchone()[0] == 0:
-            c.execute("INSERT INTO tasks (task_date, task_time, description, priority, repeat) VALUES (?,?,?,?,?)",
-                      (today, task["time"], task["desc"], task["priority"], task["repeat"]))
+            # استخدام add_task التي تتعامل مع غياب العمود
+            add_task(today, task["time"], task["desc"], task["priority"], task["repeat"])
             added += 1
     conn.commit()
     conn.close()
@@ -241,7 +276,11 @@ def reschedule_pending():
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending'", (today,))
+    try:
+        c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending'", (today,))
+    except:
+        # إذا كان العمود غير موجود
+        c.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending'", (today,))
     for task_id, task_date, task_time, desc in c.fetchall():
         schedule_reminder(task_id, task_date, task_time, desc)
     conn.close()
