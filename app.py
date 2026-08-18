@@ -165,42 +165,37 @@ DAILY_TASKS = [
 ]
 
 GYM_SCHEDULE = {
-    "Push": [
-        ("ضغط دمبل مائل", "https://www.youtube.com/watch?v=2y7Q4b0tYhI"),
-        ("ضغط صدر أو جهاز الصدر", "https://www.youtube.com/watch?v=rT7DgCr-3pg"),
-        ("تمديد الترايسبس بالكابل", "https://www.youtube.com/watch?v=2-LAMcpzodU"),
-        ("رفرفة جانبية بالدمبل", "https://www.youtube.com/watch?v=3VcKaXpzq1s"),
-        ("ضغط الكتف", "https://www.youtube.com/watch?v=Uj7F6wOH9vo"),
+    "Upper body (strength)": [
+        ("barbell bench press", "https://www.youtube.com/watch?v=lWFknlOTbyM"),
+        ("single dumbbell row", "https://www.youtube.com/watch?v=dFzUjzfih7k"),
+        ("over head shoulder press", "https://www.youtube.com/watch?v=rO_iEImwHyo"),
+        ("lat pulldowns", "https://www.youtube.com/watch?v=JGeRYIZdojU"),
+        ("dumbbell bicep curl", "https://www.youtube.com/watch?v=6DeLZ6cbgWQ"),
+        ("triceps rope pushdowns", "https://www.youtube.com/watch?v=-zLyUAo1gMw"),
     ],
-    "Pull": [
-        ("سحب أمامي قبضة واسعة", "https://www.youtube.com/watch?v=CAwf7n6Luuc"),
-        ("تجديف دمبل بذراع واحدة", "https://www.youtube.com/watch?v=pYcpY20QaE8"),
-        ("تجديف بالكابل", "https://www.youtube.com/watch?v=GZbfZ033n74"),
-        ("بايسبس بالكابل", "https://www.youtube.com/watch?v=2y3H3tKxDqk"),
-        ("هامر كيرل بالكابل", "https://www.youtube.com/watch?v=1Uq_9GvYKOE"),
-        ("رفرفة خلفية", "https://www.youtube.com/watch?v=4gKVyEGU4QE"),
+    "lower body (Quad focus)": [
+        ("leg press", "https://www.youtube.com/watch?v=q4W4_VJbKW0"),
+        ("RDL", "https://www.youtube.com/watch?v=3VXmecChYYM"),
+        ("bulgarian split squats", "https://www.youtube.com/watch?v=Fmjj7wFJWRE"),
+        ("seated leg extension", "https://www.youtube.com/watch?v=4ZDm5EbiFI8"),
+        ("overhead triceps extension", "https://www.youtube.com/watch?v=eMTy3qylqnE"),
+        
     ],
-    "Legs": [
-        ("سكوات", "https://www.youtube.com/watch?v=aclHkVaku9U"),
-        ("رفعة رومانية", "https://www.youtube.com/watch?v=JCXUYuzwNrM"),
-        ("تمديد الأرجل", "https://www.youtube.com/watch?v=YyvSfVjQeL0"),
-        ("ثني الأرجل الخلفية", "https://www.youtube.com/watch?v=1jPgulGf2fA"),
-        ("رفع السمانة", "https://www.youtube.com/watch?v=1WkZPpPyg7M"),
+    "Upper body (hypertrophy)": [
+        ("incline/bench press", "https://www.youtube.com/watch?v=5k_enq6vXGM"),
+        ("seated cable row", "https://www.youtube.com/watch?v=UCXxvVItLoM"),
+        ("dumbbell lateral raises", "https://www.youtube.com/watch?v=PzsMitRdI_8"),
+        ("chest-supported t-bar row ", "https://youtu.be/CRpez9nWVH0"),
+        ("chest-supported t-bar row ", "https://www.youtube.com/watch?v=ns-RGsbzqok"),
     ],
-    "Chest & Back": [
-        ("ضغط صدر مائل", "https://www.youtube.com/watch?v=2y7Q4b0tYhI"),
-        ("ضغط دمبل مستوٍ", "https://www.youtube.com/watch?v=3VcKaXpzq1s"),
-        ("سحب أمامي", "https://www.youtube.com/watch?v=CAwf7n6Luuc"),
-        ("تجديف دمبل", "https://www.youtube.com/watch?v=pYcpY20QaE8"),
-        ("تجديف بالكابل", "https://www.youtube.com/watch?v=GZbfZ033n74"),
+    "lower body (posterior chain focus)": [
+        ("RDL", "https://www.youtube.com/watch?v=3VXmecChYYM"),
+        ("goblet squat", "https://www.youtube.com/watch?v=gCESNsDsbqk"),
+        ("seated leg curl", "https://www.youtube.com/watch?v=t9sTSr-JYSs"),
+        ("hip thrusts", "https://www.youtube.com/watch?v=76t0z3Tdx6Q"),
+        ("seated calf raises", "https://www.youtube.com/watch?v=3ZRe_QpvRPg"),
     ],
-    "Arms": [
-        ("تمديد الترايسبس بالحبل", "https://www.youtube.com/watch?v=2-LAMcpzodU"),
-        ("سكُل كراشر", "https://www.youtube.com/watch?v=d_KZxkY_0cM"),
-        ("بايسبس بريتشر", "https://www.youtube.com/watch?v=fI9h6TgLW8Y"),
-        ("هامر كيرل", "https://www.youtube.com/watch?v=1Uq_9GvYKOE"),
-        ("رفرفة جانبية بالكابل", "https://www.youtube.com/watch?v=3VcKaXpzq1s"),
-    ],
+
 }
 
 
