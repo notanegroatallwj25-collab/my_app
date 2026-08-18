@@ -13,7 +13,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
-from flask import Flask, flash, redirect, render_template_string, request, url_for, session, g
+from flask import Flask, flash, redirect, render_template_string, request, url_for, session, g, has_request_context
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -289,7 +289,8 @@ def verify_user(username: str, password: str) -> int | None:
     return None
 
 def get_current_user() -> dict | None:
-    if "user_id" in session:
+    # Avoid accessing session outside request context
+    if has_request_context() and "user_id" in session:
         with connect_db() as conn:
             user = conn.execute(
                 "SELECT id, username, created_at FROM users WHERE id = ?",
@@ -745,7 +746,7 @@ def create_next_repeated_task(task: sqlite3.Row) -> None:
             )
 
 # -----------------------------------------------------------------------------
-# Notifications and scheduler (FIXED)
+# Notifications and scheduler
 # -----------------------------------------------------------------------------
 scheduler = BackgroundScheduler(
     timezone=LOCAL_TZ,
@@ -1048,8 +1049,6 @@ function toggleFocus(button){
 """
 
 # (Other template strings: EDIT_BODY, STATS_BODY, GYM_BODY remain exactly as before)
-# I'll include them for completeness but they are unchanged.
-
 EDIT_BODY = """
 <main class="shell"><section class="surface subpage">
   <div class="subpage-head"><h1>تعديل المهمة</h1><a class="btn btn-light" href="{{ url_for('index') }}">العودة للجدول</a></div>
