@@ -745,7 +745,7 @@ def create_next_repeated_task(task: sqlite3.Row) -> None:
             )
 
 # -----------------------------------------------------------------------------
-# Notifications and scheduler
+# Notifications and scheduler (FIXED)
 # -----------------------------------------------------------------------------
 scheduler = BackgroundScheduler(
     timezone=LOCAL_TZ,
@@ -800,23 +800,24 @@ def send_pre_reminder(description: str) -> None:
     send_ntfy(f"باقي 5 دقائق على موعد: {description}", "تذكير مبكر")
 
 def send_initial_reminder(task_id: int, description: str) -> None:
+    # Build actions using PUBLIC_URL (avoid url_for outside request context)
     actions = None
     if PUBLIC_URL:
         actions = [
             {
                 "action": "http",
                 "label": "أنجزتها",
-                "url": f"{PUBLIC_URL}{url_for('respond', task_id=task_id, action='done')}",
+                "url": f"{PUBLIC_URL}/task/{task_id}/done",
             },
             {
                 "action": "http",
                 "label": "متأخرة",
-                "url": f"{PUBLIC_URL}{url_for('respond', task_id=task_id, action='late')}",
+                "url": f"{PUBLIC_URL}/task/{task_id}/late",
             },
             {
                 "action": "http",
                 "label": "تخطي",
-                "url": f"{PUBLIC_URL}{url_for('respond', task_id=task_id, action='skip')}",
+                "url": f"{PUBLIC_URL}/task/{task_id}/skip",
             },
         ]
     with connect_db() as conn:
@@ -827,36 +828,20 @@ def send_initial_reminder(task_id: int, description: str) -> None:
     send_ntfy(f"حان وقت الإنجاز: {description}", "وقت التنفيذ", actions)
 
 def schedule_pending_tasks() -> None:
-    user_id = get_current_user_id()
-    if user_id is None:
-        # Fallback: schedule all pending tasks for today
-        with connect_db() as conn:
-            tasks = conn.execute(
-                """
-                SELECT id, task_date, task_time, description
-                FROM tasks
-                WHERE task_date=? AND status='pending' AND reminded_at IS NULL
-                """,
-                (today_iso(),)
-            ).fetchall()
-        for task in tasks:
-            schedule_reminder(
-                task["id"], task["task_date"], task["task_time"], task["description"]
-            )
-    else:
-        with connect_db() as conn:
-            tasks = conn.execute(
-                """
-                SELECT id, task_date, task_time, description
-                FROM tasks
-                WHERE user_id = ? AND task_date=? AND status='pending' AND reminded_at IS NULL
-                """,
-                (user_id, today_iso())
-            ).fetchall()
-        for task in tasks:
-            schedule_reminder(
-                task["id"], task["task_date"], task["task_time"], task["description"]
-            )
+    """Schedule reminders for all pending tasks today (for all users)."""
+    with connect_db() as conn:
+        tasks = conn.execute(
+            """
+            SELECT id, task_date, task_time, description
+            FROM tasks
+            WHERE task_date=? AND status='pending' AND reminded_at IS NULL
+            """,
+            (today_iso(),)
+        ).fetchall()
+    for task in tasks:
+        schedule_reminder(
+            task["id"], task["task_date"], task["task_time"], task["description"]
+        )
 
 def start_scheduler() -> None:
     repair_db()
