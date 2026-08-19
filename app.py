@@ -610,6 +610,23 @@ def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
         logger.info("Added %s daily tasks for user %s on %s", added, user_id, target)
     return added
 
+def delete_daily_tasks_for_user(user_id: int) -> int:
+    """Delete all automatic daily tasks for a user."""
+    deleted = 0
+    with connect_db() as conn:
+        for item in DAILY_TASKS:
+            cursor = conn.execute(
+                """
+                DELETE FROM tasks
+                WHERE user_id = ? AND description = ? AND task_date >= ?
+                """,
+                (user_id, item["description"], today_iso())
+            )
+            deleted += cursor.rowcount
+    if deleted:
+        logger.info("Deleted %s daily tasks for user %s", deleted, user_id)
+    return deleted
+
 def delete_old_tasks() -> int:
     user_id = get_current_user_id()
     if user_id is None:
@@ -998,7 +1015,10 @@ HOME_BODY = """
     <form class="action-form" method="post" action="{{ url_for('add_daily_tasks_route') }}">
       <button class="btn btn-warning" type="submit">إضافة المهام اليومية التلقائية</button>
     </form>
-    <!-- NEW: Archive old tasks button -->
+    <!-- NEW: Delete daily tasks button -->
+    <form class="action-form" method="post" action="{{ url_for('delete_daily_tasks') }}" onsubmit="return confirm('سيتم حذف جميع المهام اليومية التلقائية الحالية والمستقبلية. هل تريد المتابعة؟')">
+      <button class="btn btn-danger" type="submit">🗑️ حذف المهام التلقائية</button>
+    </form>
     <form class="action-form" method="post" action="{{ url_for('archive_old') }}" onsubmit="return confirm('سيتم نقل المهام القديمة إلى سجل المنجزات. هل تريد المتابعة؟')">
       <button class="btn btn-light" type="submit">أرشفة المهام القديمة</button>
     </form>
@@ -1268,6 +1288,17 @@ def add_daily_tasks_route():
         f"تمت إضافة {added} مهمة يومية جديدة" if added else "المهام اليومية موجودة مسبقًا",
         "success",
     )
+    return redirect(url_for("index"))
+
+@app.route("/delete_daily_tasks", methods=["POST"])
+@login_required
+def delete_daily_tasks():
+    user_id = get_current_user_id()
+    if user_id is None:
+        flash("يجب تسجيل الدخول", "error")
+        return redirect(url_for("index"))
+    deleted = delete_daily_tasks_for_user(user_id)
+    flash(f"تم حذف {deleted} مهمة يومية تلقائية", "success")
     return redirect(url_for("index"))
 
 @app.route("/archive_old", methods=["POST"])
