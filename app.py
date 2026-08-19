@@ -163,7 +163,6 @@ def connect_db() -> sqlite3.Connection:
 
 def repair_db() -> None:
     with connect_db() as conn:
-        # Users table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,8 +171,6 @@ def repair_db() -> None:
                 created_at TEXT NOT NULL
             )
         """)
-        
-        # Tasks table with user_id and completed_at
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,8 +187,6 @@ def repair_db() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
-        
-        # Streak table with user_id
         conn.execute("""
             CREATE TABLE IF NOT EXISTS streak (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,8 +196,6 @@ def repair_db() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
-        
-        # Completed tasks history (permanent archive)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS completed_tasks_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,42 +209,30 @@ def repair_db() -> None:
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
-        
-        # Add columns if missing (for compatibility)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
         if "user_id" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN user_id INTEGER REFERENCES users(id)")
         if "completed_at" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT NULL")
-        
-        # Migrate existing data
         migrate_existing_data(conn)
 
 def migrate_existing_data(conn: sqlite3.Connection) -> None:
-    """Migrate data from old schema to user-based schema"""
     users = conn.execute("SELECT * FROM users").fetchall()
     if not users:
-        # Create default user
         default_user = os.environ.get("DEFAULT_USER", "sh3sh3edition")
         default_pass = os.environ.get("DEFAULT_PASS", "hshsedu444")
         password_hash = hashlib.sha256(default_pass.encode()).hexdigest()
-        
         conn.execute(
             "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
             (default_user, password_hash, now_local().isoformat())
         )
         user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        
-        # Update existing tasks to belong to default user
         conn.execute("UPDATE tasks SET user_id = ? WHERE user_id IS NULL", (user_id,))
-        
-        # Create streak for default user
         conn.execute(
             "INSERT OR IGNORE INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
             (user_id, today_iso())
         )
     else:
-        # Ensure all tasks have user_id
         for user in users:
             conn.execute("UPDATE tasks SET user_id = ? WHERE user_id IS NULL", (user["id"],))
 
@@ -289,7 +270,6 @@ def verify_user(username: str, password: str) -> int | None:
     return None
 
 def get_current_user() -> dict | None:
-    # Avoid accessing session outside request context
     if has_request_context() and "user_id" in session:
         with connect_db() as conn:
             user = conn.execute(
@@ -317,16 +297,13 @@ def get_current_user_id() -> int | None:
     return user["id"] if user else None
 
 def add_task(task_date: str, task_time: str, description: str, priority: str, repeat: str = "none") -> int:
-    """Add task for current user. Falls back to default user if not logged in (for compatibility)."""
     user_id = get_current_user_id()
     if user_id is None:
-        # Fallback: use first user or create default
         with connect_db() as conn:
             user = conn.execute("SELECT id FROM users LIMIT 1").fetchone()
             if user:
                 user_id = user["id"]
             else:
-                # Create default user
                 default_user = os.environ.get("DEFAULT_USER", "sh3sh3edition")
                 default_pass = os.environ.get("DEFAULT_PASS", "hshsedu444")
                 password_hash = hash_password(default_pass)
@@ -355,7 +332,6 @@ def add_task_user(user_id: int, task_date: str, task_time: str, description: str
 def get_task(task_id: int) -> sqlite3.Row | None:
     user_id = get_current_user_id()
     if user_id is None:
-        # Fallback
         with connect_db() as conn:
             return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
     return get_task_user(task_id, user_id)
@@ -370,7 +346,6 @@ def get_task_user(task_id: int, user_id: int) -> sqlite3.Row | None:
 def get_today_tasks() -> list[dict[str, Any]]:
     user_id = get_current_user_id()
     if user_id is None:
-        # Fallback: get all tasks for today (old behavior)
         with connect_db() as conn:
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE task_date=? ORDER BY task_time, id",
@@ -438,7 +413,6 @@ def get_user_streak(user_id: int) -> int:
 def update_streak_after_completion() -> int:
     user_id = get_current_user_id()
     if user_id is None:
-        # Fallback: update first streak
         with connect_db() as conn:
             row = conn.execute("SELECT id, last_active_date, count FROM streak ORDER BY id LIMIT 1").fetchone()
             if not row:
@@ -508,7 +482,6 @@ def reset_user_streak(user_id: int) -> None:
 def get_stats() -> dict[str, Any]:
     user_id = get_current_user_id()
     if user_id is None:
-        # Fallback: global stats (old behavior)
         with connect_db() as conn:
             total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
             done = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='done'").fetchone()[0]
@@ -535,6 +508,7 @@ def get_stats() -> dict[str, Any]:
                 "best_day": best_day["task_date"] if best_day else "لا يوجد",
                 "best_day_count": int(best_day["completed"]) if best_day else 0,
                 "last_seven": [dict(row) for row in last_seven],
+                "history_count": 0,
             }
     return get_user_stats(user_id)
 
@@ -562,6 +536,10 @@ def get_user_stats(user_id: int) -> dict[str, Any]:
             WHERE user_id = ? AND status='done' AND task_date >= ?
             GROUP BY task_date ORDER BY task_date
         """, (user_id, (now_local().date() - timedelta(days=6)).isoformat())).fetchall()
+        history_count = conn.execute(
+            "SELECT COUNT(*) FROM completed_tasks_history WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()[0]
     return {
         "total": int(total),
         "done": int(done),
@@ -571,32 +549,8 @@ def get_user_stats(user_id: int) -> dict[str, Any]:
         "best_day": best_day["task_date"] if best_day else "لا يوجد",
         "best_day_count": int(best_day["completed"]) if best_day else 0,
         "last_seven": [dict(row) for row in last_seven],
+        "history_count": int(history_count),
     }
-
-def add_daily_tasks_for(day: date | None = None) -> int:
-    """Add daily tasks for current user."""
-    user_id = get_current_user_id()
-    if user_id is None:
-        # Fallback: use default user
-        with connect_db() as conn:
-            user = conn.execute("SELECT id FROM users LIMIT 1").fetchone()
-            if user:
-                user_id = user["id"]
-            else:
-                # Create default user
-                default_user = os.environ.get("DEFAULT_USER", "sh3sh3edition")
-                default_pass = os.environ.get("DEFAULT_PASS", "hshsedu444")
-                password_hash = hash_password(default_pass)
-                conn.execute(
-                    "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-                    (default_user, password_hash, now_local().isoformat())
-                )
-                user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                conn.execute(
-                    "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
-                    (user_id, today_iso())
-                )
-    return add_daily_tasks_for_user(user_id, day)
 
 def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
     target = (day or now_local().date()).isoformat()
@@ -625,7 +579,6 @@ def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
     return added
 
 def delete_old_tasks() -> int:
-    """Delete old tasks (only those before today) for the current user."""
     user_id = get_current_user_id()
     if user_id is None:
         with connect_db() as conn:
@@ -639,7 +592,6 @@ def delete_old_tasks() -> int:
         return cursor.rowcount
 
 def delete_completed_tasks() -> int:
-    """Delete completed tasks (status='done') for the current user."""
     user_id = get_current_user_id()
     if user_id is None:
         with connect_db() as conn:
@@ -677,7 +629,6 @@ def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
         if action == "done":
             status = "done" if delay_minutes <= 5 else "late"
             score = base_score if status == "done" else -base_score
-            # Archive to history before marking done
             if status == "done":
                 conn.execute(
                     """
@@ -801,7 +752,6 @@ def send_pre_reminder(description: str) -> None:
     send_ntfy(f"باقي 5 دقائق على موعد: {description}", "تذكير مبكر")
 
 def send_initial_reminder(task_id: int, description: str) -> None:
-    # Build actions using PUBLIC_URL (avoid url_for outside request context)
     actions = None
     if PUBLIC_URL:
         actions = [
@@ -829,7 +779,6 @@ def send_initial_reminder(task_id: int, description: str) -> None:
     send_ntfy(f"حان وقت الإنجاز: {description}", "وقت التنفيذ", actions)
 
 def schedule_pending_tasks() -> None:
-    """Schedule reminders for all pending tasks today (for all users)."""
     with connect_db() as conn:
         tasks = conn.execute(
             """
@@ -846,8 +795,6 @@ def schedule_pending_tasks() -> None:
 
 def start_scheduler() -> None:
     repair_db()
-    if AUTO_DAILY_TASKS:
-        add_daily_tasks_for()
     if not scheduler.running:
         scheduler.add_job(
             daily_rollover,
@@ -856,12 +803,16 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         scheduler.start()
-    schedule_pending_tasks()
+    # Run once at startup to ensure today's tasks exist for all users
+    daily_rollover()
 
 def daily_rollover() -> None:
     repair_db()
     if AUTO_DAILY_TASKS:
-        add_daily_tasks_for()
+        with connect_db() as conn:
+            users = conn.execute("SELECT id FROM users").fetchall()
+            for user in users:
+                add_daily_tasks_for_user(user["id"])
     schedule_pending_tasks()
 
 # -----------------------------------------------------------------------------
@@ -890,10 +841,9 @@ a{text-decoration:none;color:inherit}button,input,select{font:inherit}button{cur
 """
 
 # -----------------------------------------------------------------------------
-# Templates (modified to include auth links and user info)
+# Templates
 # -----------------------------------------------------------------------------
 def render_page(body: str, **context: Any) -> str:
-    # Add auth status to context
     user = get_current_user()
     context["user"] = user
     context["auth_links"] = render_auth_links(user)
@@ -929,33 +879,43 @@ def render_auth_links(user) -> str:
         </div>
         """
 
-# ---- Login/Signup pages ----
 AUTH_BODY = """
-<main class="shell" style="max-width:500px;">
-    <section class="surface subpage">
-        <h1 style="text-align:center;">{{ title }}</h1>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <div class="flash {{ category }}">{{ message }}</div>
-            {% endfor %}
-        {% endwith %}
-        <form method="post" style="display:flex;flex-direction:column;gap:15px;">
-            <input class="field" type="text" name="username" placeholder="اسم المستخدم" required>
-            <input class="field" type="password" name="password" placeholder="كلمة المرور" required>
-            <button class="btn btn-primary" type="submit">{{ submit_label }}</button>
-        </form>
-        <div style="text-align:center;margin-top:15px;">
-            {% if mode == 'login' %}
-                <a href="{{ url_for('signup') }}">ليس لديك حساب؟ سجل الآن</a>
-            {% else %}
-                <a href="{{ url_for('login') }}">لديك حساب بالفعل؟ سجل دخول</a>
-            {% endif %}
+<main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 10%,#dfe7ff 0,transparent 50%),#f0f4fe;font-family:Cairo,sans-serif;">
+    <div style="width:100%;max-width:480px;padding:20px;">
+        <div style="background:rgba(255,255,255,0.95);backdrop-filter:blur(12px);border-radius:32px;padding:40px 30px;box-shadow:0 25px 60px rgba(75,70,229,0.15);border:1px solid rgba(255,255,255,0.7);">
+            <div style="text-align:center;margin-bottom:30px;">
+                <div style="width:64px;height:64px;border-radius:20px;background:linear-gradient(135deg,#4b46e5,#8374ff);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:28px;color:#fff;box-shadow:0 12px 24px rgba(75,70,229,0.25);">✓</div>
+                <h1 style="margin:0;font-size:26px;font-weight:800;color:#172033;">{{ title }}</h1>
+                <p style="color:#708096;font-size:14px;margin-top:6px;">{{ 'أهلاً بعودتك' if mode == 'login' else 'انضم إلينا الآن' }}</p>
+            </div>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}" style="margin-bottom:16px;">{{ message }}</div>
+                {% endfor %}
+            {% endwith %}
+            <form method="post" style="display:flex;flex-direction:column;gap:16px;">
+                <div>
+                    <label style="display:block;font-size:13px;font-weight:700;color:#475569;margin-bottom:4px;">اسم المستخدم</label>
+                    <input class="field" type="text" name="username" placeholder="اكتب اسم المستخدم" required style="width:100%;padding:14px 16px;border-radius:14px;border:1px solid #e4e9f2;background:#f8faff;font-size:15px;transition:border-color 0.2s;">
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;font-weight:700;color:#475569;margin-bottom:4px;">كلمة المرور</label>
+                    <input class="field" type="password" name="password" placeholder="••••••••" required style="width:100%;padding:14px 16px;border-radius:14px;border:1px solid #e4e9f2;background:#f8faff;font-size:15px;transition:border-color 0.2s;">
+                </div>
+                <button class="btn btn-primary" type="submit" style="width:100%;padding:14px;border-radius:14px;font-size:16px;background:linear-gradient(135deg,#4b46e5,#8374ff);color:#fff;font-weight:800;border:none;cursor:pointer;transition:transform 0.15s,box-shadow 0.2s;box-shadow:0 8px 20px rgba(75,70,229,0.3);">{{ submit_label }}</button>
+            </form>
+            <div style="text-align:center;margin-top:20px;font-size:14px;color:#708096;">
+                {% if mode == 'login' %}
+                    <a href="{{ url_for('signup') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;">إنشاء حساب جديد</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;">لديك حساب؟ سجل دخول</a>
+                {% endif %}
+            </div>
         </div>
-    </section>
+    </div>
 </main>
 """
 
-# ---- Home page (modified to show user-specific data) ----
 HOME_BODY = """
 <main class="shell">
   <section class="surface hero">
@@ -1048,7 +1008,6 @@ function toggleFocus(button){
 </script>
 """
 
-# (Other template strings: EDIT_BODY, STATS_BODY, GYM_BODY remain exactly as before)
 EDIT_BODY = """
 <main class="shell"><section class="surface subpage">
   <div class="subpage-head"><h1>تعديل المهمة</h1><a class="btn btn-light" href="{{ url_for('index') }}">العودة للجدول</a></div>
@@ -1077,6 +1036,7 @@ STATS_BODY = """
     <div class="chart-list">{% for day in stats.last_seven %}<div class="bar-item"><b>{{ day.completed }}</b><div class="bar" style="height:{{ (day.completed / max_count * 100)|int }}%"></div><small>{{ day.task_date[5:] }}</small></div>{% else %}<div class="empty">ستظهر الإحصائيات بعد إنجاز المهام</div>{% endfor %}</div>
   </div>
   <div class="surface" style="padding:18px;margin-top:16px"><h2>أفضل يوم</h2><p>{{ stats.best_day }} — {{ stats.best_day_count }} مهام منجزة</p></div>
+  <div class="surface" style="padding:18px;margin-top:16px"><h2>إجمالي المهام المنجزة في التاريخ</h2><p style="font-size:24px;font-weight:800;color:var(--brand);">{{ stats.history_count }}</p></div>
 </section></main>
 """
 
@@ -1256,7 +1216,11 @@ def edit(task_id: int):
 @login_required
 def add_daily_tasks_route():
     repair_db()
-    added = add_daily_tasks_for()
+    user_id = get_current_user_id()
+    if user_id is None:
+        flash("يجب تسجيل الدخول", "error")
+        return redirect(url_for("index"))
+    added = add_daily_tasks_for_user(user_id)
     schedule_pending_tasks()
     flash(
         f"تمت إضافة {added} مهمة يومية جديدة" if added else "المهام اليومية موجودة مسبقًا",
