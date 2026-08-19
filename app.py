@@ -99,19 +99,6 @@ STATUS_LABELS = {
     "skipped": "متخطاة",
 }
 
-DAILY_TASKS = [
-    {"time": "04:00", "description": "الاستيقاظ وصلاة الفجر", "priority": "urgent_important", "repeat": "daily"},
-    {"time": "06:00", "description": "الإفطار وترتيب الغرفة", "priority": "not_urgent_important", "repeat": "daily"},
-    {"time": "08:00", "description": "تنظيف الحمام والاستحمام", "priority": "not_urgent_important", "repeat": "daily"},
-    {"time": "12:00", "description": "الذهاب إلى الجيم", "priority": "urgent_important", "repeat": "daily"},
-    {"time": "12:40", "description": "صلاة الظهر", "priority": "urgent_important", "repeat": "daily"},
-    {"time": "14:00", "description": "الرجوع من الجيم والاستحمام", "priority": "urgent_important", "repeat": "daily"},
-    {"time": "16:00", "description": "قراءة صفحة على الأقل من القرآن", "priority": "not_urgent_important", "repeat": "daily"},
-    {"time": "16:20", "description": "صلاة العصر", "priority": "urgent_important", "repeat": "daily"},
-    {"time": "19:20", "description": "صلاة المغرب", "priority": "urgent_important", "repeat": "daily"},
-    {"time": "20:40", "description": "صلاة العشاء", "priority": "urgent_important", "repeat": "daily"},
-]
-
 GYM_SCHEDULE = {
     "Upper body (strength)": [
         ("barbell bench press", "https://www.youtube.com/watch?v=lWFknlOTbyM"),
@@ -610,23 +597,6 @@ def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
         logger.info("Added %s daily tasks for user %s on %s", added, user_id, target)
     return added
 
-def delete_daily_tasks_for_user(user_id: int) -> int:
-    """Delete all automatic daily tasks for a user."""
-    deleted = 0
-    with connect_db() as conn:
-        for item in DAILY_TASKS:
-            cursor = conn.execute(
-                """
-                DELETE FROM tasks
-                WHERE user_id = ? AND description = ? AND task_date >= ?
-                """,
-                (user_id, item["description"], today_iso())
-            )
-            deleted += cursor.rowcount
-    if deleted:
-        logger.info("Deleted %s daily tasks for user %s", deleted, user_id)
-    return deleted
-
 def delete_old_tasks() -> int:
     user_id = get_current_user_id()
     if user_id is None:
@@ -842,33 +812,49 @@ def schedule_pending_tasks() -> None:
             task["id"], task["task_date"], task["task_time"], task["description"]
         )
 
-def daily_rollover() -> None:
-    """Run at midnight: archive old tasks and add new daily tasks."""
-    repair_db()
-    with connect_db() as conn:
-        users = conn.execute("SELECT id FROM users").fetchall()
-        for user in users:
-            # Archive tasks older than today
-            archive_old_tasks_for_user(user["id"])
-            # Add today's daily tasks
-            if AUTO_DAILY_TASKS:
-                add_daily_tasks_for_user(user["id"])
-    schedule_pending_tasks()
-    logger.info("Daily rollover completed for %s users", len(users))
+# -----------------------------------------------------------------------------
+# NEW: Check and rollover on every request
+# -----------------------------------------------------------------------------
+_last_checked_date = None  # store the last date we rolled over
 
-def start_scheduler() -> None:
-    repair_db()
-    # Run rollover immediately on startup to archive old tasks and add today's tasks
-    daily_rollover()
-    if not scheduler.running:
-        scheduler.add_job(
-            daily_rollover,
-            CronTrigger(hour=0, minute=1, timezone=LOCAL_TZ),
-            id="daily_rollover",
-            replace_existing=True,
-        )
-        scheduler.start()
-        logger.info("Scheduler started with daily rollover at 00:01")
+def check_and_rollover():
+    """Check if the day has changed and run rollover if needed."""
+    global _last_checked_date
+    current_date = today_iso()
+    if _last_checked_date is None:
+        # First run: set the date and run rollover once
+        _last_checked_date = current_date
+        # Also do a one-time cleanup: archive all old tasks for all users
+        with connect_db() as conn:
+            users = conn.execute("SELECT id FROM users").fetchall()
+            for user in users:
+                archive_old_tasks_for_user(user["id"])
+        # Add today's daily tasks for all users
+        if AUTO_DAILY_TASKS:
+            with connect_db() as conn:
+                users = conn.execute("SELECT id FROM users").fetchall()
+                for user in users:
+                    add_daily_tasks_for_user(user["id"])
+        logger.info("Initial cleanup and daily tasks added")
+        return
+
+    if current_date != _last_checked_date:
+        # The day has changed, run rollover
+        logger.info("Day changed from %s to %s, running rollover", _last_checked_date, current_date)
+        with connect_db() as conn:
+            users = conn.execute("SELECT id FROM users").fetchall()
+            for user in users:
+                archive_old_tasks_for_user(user["id"])
+                if AUTO_DAILY_TASKS:
+                    add_daily_tasks_for_user(user["id"])
+        _last_checked_date = current_date
+        # Schedule reminders for pending tasks after rollover
+        schedule_pending_tasks()
+
+# Register a before_request handler to run check_and_rollover on every request
+@app.before_request
+def before_request():
+    check_and_rollover()
 
 # -----------------------------------------------------------------------------
 # Web app and templates
@@ -878,7 +864,7 @@ app.secret_key = os.environ.get("SESSION_SECRET", "local-development-secret")
 app.config["JSON_AS_ASCII"] = False
 
 # -----------------------------------------------------------------------------
-# Base Style
+# Base Style (unchanged)
 # -----------------------------------------------------------------------------
 BASE_STYLE = """
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
@@ -1014,10 +1000,6 @@ HOME_BODY = """
     <button class="btn btn-primary" type="button" onclick="toggleFocus(this)">وضع التركيز</button>
     <form class="action-form" method="post" action="{{ url_for('add_daily_tasks_route') }}">
       <button class="btn btn-warning" type="submit">إضافة المهام اليومية التلقائية</button>
-    </form>
-    <!-- NEW: Delete daily tasks button -->
-    <form class="action-form" method="post" action="{{ url_for('delete_daily_tasks') }}" onsubmit="return confirm('سيتم حذف جميع المهام اليومية التلقائية الحالية والمستقبلية. هل تريد المتابعة؟')">
-      <button class="btn btn-danger" type="submit">🗑️ حذف المهام التلقائية</button>
     </form>
     <form class="action-form" method="post" action="{{ url_for('archive_old') }}" onsubmit="return confirm('سيتم نقل المهام القديمة إلى سجل المنجزات. هل تريد المتابعة؟')">
       <button class="btn btn-light" type="submit">أرشفة المهام القديمة</button>
@@ -1290,17 +1272,6 @@ def add_daily_tasks_route():
     )
     return redirect(url_for("index"))
 
-@app.route("/delete_daily_tasks", methods=["POST"])
-@login_required
-def delete_daily_tasks():
-    user_id = get_current_user_id()
-    if user_id is None:
-        flash("يجب تسجيل الدخول", "error")
-        return redirect(url_for("index"))
-    deleted = delete_daily_tasks_for_user(user_id)
-    flash(f"تم حذف {deleted} مهمة يومية تلقائية", "success")
-    return redirect(url_for("index"))
-
 @app.route("/archive_old", methods=["POST"])
 @login_required
 def archive_old():
@@ -1364,9 +1335,21 @@ def healthz():
 # Startup
 # -----------------------------------------------------------------------------
 if os.environ.get("DISABLE_SCHEDULER", "0") != "1":
-    start_scheduler()
+    # Start the scheduler for midnight rollover
+    repair_db()
+    scheduler.add_job(
+        daily_rollover,
+        CronTrigger(hour=0, minute=1, timezone=LOCAL_TZ),
+        id="daily_rollover",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("Scheduler started with daily rollover at 00:01")
 else:
     repair_db()
+
+# The before_request handler will take care of initial cleanup and day change
+logger.info("Application started. Check-and-rollover will run on each request.")
 
 if __name__ == "__main__":
     app.run(
