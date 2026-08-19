@@ -541,7 +541,6 @@ def get_user_stats(user_id: int) -> dict[str, Any]:
     }
 
 def archive_old_tasks_for_user(user_id: int) -> int:
-    """Move all tasks older than today to history and mark as done."""
     today = today_iso()
     archived = 0
     with connect_db() as conn:
@@ -812,49 +811,29 @@ def schedule_pending_tasks() -> None:
             task["id"], task["task_date"], task["task_time"], task["description"]
         )
 
-# -----------------------------------------------------------------------------
-# NEW: Check and rollover on every request
-# -----------------------------------------------------------------------------
-_last_checked_date = None  # store the last date we rolled over
+def daily_rollover() -> None:
+    repair_db()
+    with connect_db() as conn:
+        users = conn.execute("SELECT id FROM users").fetchall()
+        for user in users:
+            archive_old_tasks_for_user(user["id"])
+            if AUTO_DAILY_TASKS:
+                add_daily_tasks_for_user(user["id"])
+    schedule_pending_tasks()
+    logger.info("Daily rollover completed for %s users", len(users))
 
-def check_and_rollover():
-    """Check if the day has changed and run rollover if needed."""
-    global _last_checked_date
-    current_date = today_iso()
-    if _last_checked_date is None:
-        # First run: set the date and run rollover once
-        _last_checked_date = current_date
-        # Also do a one-time cleanup: archive all old tasks for all users
-        with connect_db() as conn:
-            users = conn.execute("SELECT id FROM users").fetchall()
-            for user in users:
-                archive_old_tasks_for_user(user["id"])
-        # Add today's daily tasks for all users
-        if AUTO_DAILY_TASKS:
-            with connect_db() as conn:
-                users = conn.execute("SELECT id FROM users").fetchall()
-                for user in users:
-                    add_daily_tasks_for_user(user["id"])
-        logger.info("Initial cleanup and daily tasks added")
-        return
-
-    if current_date != _last_checked_date:
-        # The day has changed, run rollover
-        logger.info("Day changed from %s to %s, running rollover", _last_checked_date, current_date)
-        with connect_db() as conn:
-            users = conn.execute("SELECT id FROM users").fetchall()
-            for user in users:
-                archive_old_tasks_for_user(user["id"])
-                if AUTO_DAILY_TASKS:
-                    add_daily_tasks_for_user(user["id"])
-        _last_checked_date = current_date
-        # Schedule reminders for pending tasks after rollover
-        schedule_pending_tasks()
-
-# Register a before_request handler to run check_and_rollover on every request
-@app.before_request
-def before_request():
-    check_and_rollover()
+def start_scheduler() -> None:
+    repair_db()
+    daily_rollover()
+    if not scheduler.running:
+        scheduler.add_job(
+            daily_rollover,
+            CronTrigger(hour=0, minute=1, timezone=LOCAL_TZ),
+            id="daily_rollover",
+            replace_existing=True,
+        )
+        scheduler.start()
+        logger.info("Scheduler started with daily rollover at 00:01")
 
 # -----------------------------------------------------------------------------
 # Web app and templates
@@ -864,7 +843,7 @@ app.secret_key = os.environ.get("SESSION_SECRET", "local-development-secret")
 app.config["JSON_AS_ASCII"] = False
 
 # -----------------------------------------------------------------------------
-# Base Style (unchanged)
+# Base Style
 # -----------------------------------------------------------------------------
 BASE_STYLE = """
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
@@ -1335,21 +1314,9 @@ def healthz():
 # Startup
 # -----------------------------------------------------------------------------
 if os.environ.get("DISABLE_SCHEDULER", "0") != "1":
-    # Start the scheduler for midnight rollover
-    repair_db()
-    scheduler.add_job(
-        daily_rollover,
-        CronTrigger(hour=0, minute=1, timezone=LOCAL_TZ),
-        id="daily_rollover",
-        replace_existing=True,
-    )
-    scheduler.start()
-    logger.info("Scheduler started with daily rollover at 00:01")
+    start_scheduler()
 else:
     repair_db()
-
-# The before_request handler will take care of initial cleanup and day change
-logger.info("Application started. Check-and-rollover will run on each request.")
 
 if __name__ == "__main__":
     app.run(
