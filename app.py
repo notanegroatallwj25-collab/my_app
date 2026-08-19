@@ -558,17 +558,14 @@ def archive_old_tasks_for_user(user_id: int) -> int:
     today = today_iso()
     archived = 0
     with connect_db() as conn:
-        # Get old pending tasks
         old_tasks = conn.execute(
             """
             SELECT * FROM tasks
-            WHERE user_id = ? AND task_date < ? AND status IN ('pending', 'late')
+            WHERE user_id = ? AND task_date < ? AND status IN ('pending', 'late', 'skipped')
             """,
             (user_id, today)
         ).fetchall()
-        
         for task in old_tasks:
-            # Archive to history
             conn.execute(
                 """
                 INSERT INTO completed_tasks_history
@@ -578,7 +575,6 @@ def archive_old_tasks_for_user(user_id: int) -> int:
                 (task["user_id"], task["task_date"], task["task_time"],
                  task["description"], task["priority"], now_local().isoformat(), 0)
             )
-            # Mark as done
             conn.execute(
                 "UPDATE tasks SET status='done', completed_at=? WHERE id=?",
                 (now_local().isoformat(), task["id"])
@@ -865,7 +861,7 @@ app.secret_key = os.environ.get("SESSION_SECRET", "local-development-secret")
 app.config["JSON_AS_ASCII"] = False
 
 # -----------------------------------------------------------------------------
-# Base Style (unchanged)
+# Base Style
 # -----------------------------------------------------------------------------
 BASE_STYLE = """
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
@@ -921,7 +917,6 @@ def render_auth_links(user) -> str:
         </div>
         """
 
-# ---- Login/Signup pages (Improved Design) ----
 AUTH_BODY = """
 <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 10%,#dfe7ff 0,transparent 60%),#f0f4fe;font-family:Cairo,sans-serif;padding:20px;">
     <div style="width:100%;max-width:440px;">
@@ -959,7 +954,6 @@ AUTH_BODY = """
 </main>
 """
 
-# ---- Home page ----
 HOME_BODY = """
 <main class="shell">
   <section class="surface hero">
@@ -1003,6 +997,10 @@ HOME_BODY = """
     <button class="btn btn-primary" type="button" onclick="toggleFocus(this)">وضع التركيز</button>
     <form class="action-form" method="post" action="{{ url_for('add_daily_tasks_route') }}">
       <button class="btn btn-warning" type="submit">إضافة المهام اليومية التلقائية</button>
+    </form>
+    <!-- NEW: Archive old tasks button -->
+    <form class="action-form" method="post" action="{{ url_for('archive_old') }}" onsubmit="return confirm('سيتم نقل المهام القديمة إلى سجل المنجزات. هل تريد المتابعة؟')">
+      <button class="btn btn-light" type="submit">أرشفة المهام القديمة</button>
     </form>
     <form class="action-form" method="post" action="{{ url_for('clean') }}" onsubmit="return confirm('سيتم حذف المهام القديمة فقط. هل تريد المتابعة؟')">
       <button class="btn btn-light" type="submit">تنظيف المهام القديمة</button>
@@ -1270,6 +1268,17 @@ def add_daily_tasks_route():
         f"تمت إضافة {added} مهمة يومية جديدة" if added else "المهام اليومية موجودة مسبقًا",
         "success",
     )
+    return redirect(url_for("index"))
+
+@app.route("/archive_old", methods=["POST"])
+@login_required
+def archive_old():
+    user_id = get_current_user_id()
+    if user_id is None:
+        flash("يجب تسجيل الدخول", "error")
+        return redirect(url_for("index"))
+    archived = archive_old_tasks_for_user(user_id)
+    flash(f"تم أرشفة {archived} مهمة قديمة", "success")
     return redirect(url_for("index"))
 
 @app.route("/clean", methods=["POST", "GET"])
