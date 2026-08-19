@@ -499,6 +499,7 @@ def get_stats() -> dict[str, Any]:
                 WHERE status='done' AND task_date >= ?
                 GROUP BY task_date ORDER BY task_date
             """, ((now_local().date() - timedelta(days=6)).isoformat(),)).fetchall()
+            history_count = conn.execute("SELECT COUNT(*) FROM completed_tasks_history").fetchone()[0]
             return {
                 "total": int(total),
                 "done": int(done),
@@ -508,15 +509,15 @@ def get_stats() -> dict[str, Any]:
                 "best_day": best_day["task_date"] if best_day else "لا يوجد",
                 "best_day_count": int(best_day["completed"]) if best_day else 0,
                 "last_seven": [dict(row) for row in last_seven],
-                "history_count": 0,
+                "history_count": int(history_count),
             }
     return get_user_stats(user_id)
 
 def get_user_stats(user_id: int) -> dict[str, Any]:
     with connect_db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ?", (user_id,)).fetchone()[0]
-        done = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'done'", (user_id,)).fetchone()[0]
-        late = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status = 'late'", (user_id,)).fetchone()[0]
+        done = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status='done'", (user_id,)).fetchone()[0]
+        late = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status='late'", (user_id,)).fetchone()[0]
         pending = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE user_id = ? AND status IN ('pending','skipped')",
             (user_id,)
@@ -552,6 +553,41 @@ def get_user_stats(user_id: int) -> dict[str, Any]:
         "history_count": int(history_count),
     }
 
+def archive_old_tasks_for_user(user_id: int) -> int:
+    """Move all tasks older than today to history and mark as done."""
+    today = today_iso()
+    archived = 0
+    with connect_db() as conn:
+        # Get old pending tasks
+        old_tasks = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE user_id = ? AND task_date < ? AND status IN ('pending', 'late')
+            """,
+            (user_id, today)
+        ).fetchall()
+        
+        for task in old_tasks:
+            # Archive to history
+            conn.execute(
+                """
+                INSERT INTO completed_tasks_history
+                (user_id, task_date, task_time, description, priority, completed_at, score)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (task["user_id"], task["task_date"], task["task_time"],
+                 task["description"], task["priority"], now_local().isoformat(), 0)
+            )
+            # Mark as done
+            conn.execute(
+                "UPDATE tasks SET status='done', completed_at=? WHERE id=?",
+                (now_local().isoformat(), task["id"])
+            )
+            archived += 1
+    if archived:
+        logger.info("Archived %s old tasks for user %s", archived, user_id)
+    return archived
+
 def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
     target = (day or now_local().date()).isoformat()
     added = 0
@@ -575,7 +611,7 @@ def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
                 )
                 added += 1
     if added:
-        logger.info("Added %s automatic tasks for user %s on %s", added, user_id, target)
+        logger.info("Added %s daily tasks for user %s on %s", added, user_id, target)
     return added
 
 def delete_old_tasks() -> int:
@@ -793,8 +829,24 @@ def schedule_pending_tasks() -> None:
             task["id"], task["task_date"], task["task_time"], task["description"]
         )
 
+def daily_rollover() -> None:
+    """Run at midnight: archive old tasks and add new daily tasks."""
+    repair_db()
+    with connect_db() as conn:
+        users = conn.execute("SELECT id FROM users").fetchall()
+        for user in users:
+            # Archive tasks older than today
+            archive_old_tasks_for_user(user["id"])
+            # Add today's daily tasks
+            if AUTO_DAILY_TASKS:
+                add_daily_tasks_for_user(user["id"])
+    schedule_pending_tasks()
+    logger.info("Daily rollover completed for %s users", len(users))
+
 def start_scheduler() -> None:
     repair_db()
+    # Run rollover immediately on startup to archive old tasks and add today's tasks
+    daily_rollover()
     if not scheduler.running:
         scheduler.add_job(
             daily_rollover,
@@ -803,17 +855,7 @@ def start_scheduler() -> None:
             replace_existing=True,
         )
         scheduler.start()
-    # Run once at startup to ensure today's tasks exist for all users
-    daily_rollover()
-
-def daily_rollover() -> None:
-    repair_db()
-    if AUTO_DAILY_TASKS:
-        with connect_db() as conn:
-            users = conn.execute("SELECT id FROM users").fetchall()
-            for user in users:
-                add_daily_tasks_for_user(user["id"])
-    schedule_pending_tasks()
+        logger.info("Scheduler started with daily rollover at 00:01")
 
 # -----------------------------------------------------------------------------
 # Web app and templates
@@ -865,7 +907,7 @@ def render_auth_links(user) -> str:
     if user:
         return f"""
         <div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:space-between;align-items:center;font-size:14px;">
-            <span>👤 {user['username']}</span>
+            <span style="font-weight:700;">👤 {user['username']}</span>
             <div>
                 <a href="{url_for('logout')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">تسجيل الخروج</a>
             </div>
@@ -879,36 +921,37 @@ def render_auth_links(user) -> str:
         </div>
         """
 
+# ---- Login/Signup pages (Improved Design) ----
 AUTH_BODY = """
-<main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 10%,#dfe7ff 0,transparent 50%),#f0f4fe;font-family:Cairo,sans-serif;">
-    <div style="width:100%;max-width:480px;padding:20px;">
-        <div style="background:rgba(255,255,255,0.95);backdrop-filter:blur(12px);border-radius:32px;padding:40px 30px;box-shadow:0 25px 60px rgba(75,70,229,0.15);border:1px solid rgba(255,255,255,0.7);">
-            <div style="text-align:center;margin-bottom:30px;">
-                <div style="width:64px;height:64px;border-radius:20px;background:linear-gradient(135deg,#4b46e5,#8374ff);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:28px;color:#fff;box-shadow:0 12px 24px rgba(75,70,229,0.25);">✓</div>
-                <h1 style="margin:0;font-size:26px;font-weight:800;color:#172033;">{{ title }}</h1>
-                <p style="color:#708096;font-size:14px;margin-top:6px;">{{ 'أهلاً بعودتك' if mode == 'login' else 'انضم إلينا الآن' }}</p>
+<main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 10%,#dfe7ff 0,transparent 60%),#f0f4fe;font-family:Cairo,sans-serif;padding:20px;">
+    <div style="width:100%;max-width:440px;">
+        <div style="background:rgba(255,255,255,0.97);backdrop-filter:blur(20px);border-radius:32px;padding:40px 32px;box-shadow:0 30px 70px rgba(75,70,229,0.12),0 10px 30px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.6);">
+            <div style="text-align:center;margin-bottom:28px;">
+                <div style="width:68px;height:68px;border-radius:22px;background:linear-gradient(145deg,#4b46e5,#7b6aff);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:30px;color:#fff;box-shadow:0 12px 28px rgba(75,70,229,0.25);">✓</div>
+                <h1 style="margin:0;font-size:28px;font-weight:800;color:#172033;letter-spacing:-0.5px;">{{ title }}</h1>
+                <p style="color:#708096;font-size:15px;margin-top:4px;">{{ 'أهلاً بعودتك 👋' if mode == 'login' else 'انضم إلينا 🚀' }}</p>
             </div>
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% for category, message in messages %}
-                    <div class="flash {{ category }}" style="margin-bottom:16px;">{{ message }}</div>
+                    <div class="flash {{ category }}" style="margin-bottom:16px;padding:12px 16px;border-radius:14px;font-weight:600;{% if category == 'error' %}background:#fee2e2;color:#b91c1c;{% else %}background:#e6f7ee;color:#087443;{% endif %}">{{ message }}</div>
                 {% endfor %}
             {% endwith %}
-            <form method="post" style="display:flex;flex-direction:column;gap:16px;">
+            <form method="post" style="display:flex;flex-direction:column;gap:14px;">
                 <div>
                     <label style="display:block;font-size:13px;font-weight:700;color:#475569;margin-bottom:4px;">اسم المستخدم</label>
-                    <input class="field" type="text" name="username" placeholder="اكتب اسم المستخدم" required style="width:100%;padding:14px 16px;border-radius:14px;border:1px solid #e4e9f2;background:#f8faff;font-size:15px;transition:border-color 0.2s;">
+                    <input class="field" type="text" name="username" placeholder="اكتب اسم المستخدم" required style="width:100%;padding:14px 16px;border-radius:14px;border:2px solid #e4e9f2;background:#fafcff;font-size:15px;transition:all 0.2s;outline:none;">
                 </div>
                 <div>
                     <label style="display:block;font-size:13px;font-weight:700;color:#475569;margin-bottom:4px;">كلمة المرور</label>
-                    <input class="field" type="password" name="password" placeholder="••••••••" required style="width:100%;padding:14px 16px;border-radius:14px;border:1px solid #e4e9f2;background:#f8faff;font-size:15px;transition:border-color 0.2s;">
+                    <input class="field" type="password" name="password" placeholder="••••••••" required style="width:100%;padding:14px 16px;border-radius:14px;border:2px solid #e4e9f2;background:#fafcff;font-size:15px;transition:all 0.2s;outline:none;">
                 </div>
-                <button class="btn btn-primary" type="submit" style="width:100%;padding:14px;border-radius:14px;font-size:16px;background:linear-gradient(135deg,#4b46e5,#8374ff);color:#fff;font-weight:800;border:none;cursor:pointer;transition:transform 0.15s,box-shadow 0.2s;box-shadow:0 8px 20px rgba(75,70,229,0.3);">{{ submit_label }}</button>
+                <button class="btn btn-primary" type="submit" style="width:100%;padding:16px;border-radius:16px;font-size:16px;background:linear-gradient(145deg,#4b46e5,#6d5dfc);color:#fff;font-weight:800;border:none;cursor:pointer;transition:all 0.2s;box-shadow:0 8px 24px rgba(75,70,229,0.3);">{{ submit_label }}</button>
             </form>
-            <div style="text-align:center;margin-top:20px;font-size:14px;color:#708096;">
+            <div style="text-align:center;margin-top:18px;font-size:14px;color:#708096;">
                 {% if mode == 'login' %}
-                    <a href="{{ url_for('signup') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;">إنشاء حساب جديد</a>
+                    <a href="{{ url_for('signup') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;transition:color 0.2s;">إنشاء حساب جديد →</a>
                 {% else %}
-                    <a href="{{ url_for('login') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;">لديك حساب؟ سجل دخول</a>
+                    <a href="{{ url_for('login') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;transition:color 0.2s;">لديك حساب؟ سجل دخول →</a>
                 {% endif %}
             </div>
         </div>
@@ -916,6 +959,7 @@ AUTH_BODY = """
 </main>
 """
 
+# ---- Home page ----
 HOME_BODY = """
 <main class="shell">
   <section class="surface hero">
@@ -1036,7 +1080,7 @@ STATS_BODY = """
     <div class="chart-list">{% for day in stats.last_seven %}<div class="bar-item"><b>{{ day.completed }}</b><div class="bar" style="height:{{ (day.completed / max_count * 100)|int }}%"></div><small>{{ day.task_date[5:] }}</small></div>{% else %}<div class="empty">ستظهر الإحصائيات بعد إنجاز المهام</div>{% endfor %}</div>
   </div>
   <div class="surface" style="padding:18px;margin-top:16px"><h2>أفضل يوم</h2><p>{{ stats.best_day }} — {{ stats.best_day_count }} مهام منجزة</p></div>
-  <div class="surface" style="padding:18px;margin-top:16px"><h2>إجمالي المهام المنجزة في التاريخ</h2><p style="font-size:24px;font-weight:800;color:var(--brand);">{{ stats.history_count }}</p></div>
+  <div class="surface" style="padding:18px;margin-top:16px"><h2>إجمالي المهام المنجزة في التاريخ</h2><p style="font-size:32px;font-weight:800;color:var(--brand);text-align:center;">{{ stats.history_count }}</p></div>
 </section></main>
 """
 
@@ -1279,9 +1323,10 @@ def healthz():
 # -----------------------------------------------------------------------------
 # Startup
 # -----------------------------------------------------------------------------
-repair_db()
 if os.environ.get("DISABLE_SCHEDULER", "0") != "1":
     start_scheduler()
+else:
+    repair_db()
 
 if __name__ == "__main__":
     app.run(
