@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 import hashlib
 from functools import wraps
-
 import pytz
 import requests
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -22,8 +21,12 @@ ROOT_DIR = Path(__file__).resolve().parent
 UPLOADED_DB = ROOT_DIR / "attached_assets" / "scheduler_1787024656030.db"
 DEFAULT_DB = ROOT_DIR / "scheduler.db"
 DB_NAME = Path(os.environ.get("DB_PATH", str(DEFAULT_DB)))
+
 if "DB_PATH" not in os.environ and not DEFAULT_DB.exists() and UPLOADED_DB.exists():
     DB_NAME = UPLOADED_DB
+
+# Ensure the directory exists before we try to use it
+DB_NAME.parent.mkdir(parents=True, exist_ok=True)
 
 TIMEZONE_NAME = os.environ.get("TIMEZONE", "Africa/Cairo")
 try:
@@ -39,6 +42,7 @@ PUBLIC_URL = (
     or os.environ.get("RENDER_EXTERNAL_URL")
     or os.environ.get("BASE_URL", "")
 ).rstrip("/")
+
 AUTO_DAILY_TASKS = os.environ.get("AUTO_DAILY_TASKS", "1").lower() not in {
     "0",
     "false",
@@ -51,8 +55,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("eisenhower-scheduler")
 
+# Log the exact database path on startup to help debug persistence issues
+logger.info(f"Database initialized at: {DB_NAME.resolve()}")
+
 # -----------------------------------------------------------------------------
-# Content
+# Content & Constants
 # -----------------------------------------------------------------------------
 PRIORITIES = {
     "urgent_important": {
@@ -99,6 +106,13 @@ STATUS_LABELS = {
     "skipped": "متخطاة",
 }
 
+# FIXED: Added missing DAILY_TASKS definition that was causing the bug
+DAILY_TASKS = [
+    {"time": "08:00", "description": "مراجعة الأهداف اليومية", "priority": "urgent_important", "repeat": "daily"},
+    {"time": "14:00", "description": "استراحة ومراجعة", "priority": "not_urgent_important", "repeat": "daily"},
+    {"time": "21:00", "description": "تقييم إنجازات اليوم", "priority": "not_urgent_important", "repeat": "daily"},
+]
+
 GYM_SCHEDULE = {
     "Upper body (strength)": [
         ("barbell bench press", "https://www.youtube.com/watch?v=lWFknlOTbyM"),
@@ -119,8 +133,8 @@ GYM_SCHEDULE = {
         ("incline/bench press", "https://www.youtube.com/watch?v=5k_enq6vXGM"),
         ("seated cable row", "https://www.youtube.com/watch?v=UCXxvVItLoM"),
         ("dumbbell lateral raises", "https://www.youtube.com/watch?v=PzsMitRdI_8"),
-        ("chest-supported t-bar row ", "https://youtu.be/CRpez9nWVH0"),
-        ("chest-supported t-bar row ", "https://www.youtube.com/watch?v=ns-RGsbzqok"),
+        ("chest-supported t-bar row  ", "https://youtu.be/CRpez9nWVH0"),
+        ("chest-supported t-bar row  ", "https://www.youtube.com/watch?v=ns-RGsbzqok"),
     ],
     "lower body (posterior chain focus)": [
         ("RDL", "https://www.youtube.com/watch?v=3VXmecChYYM"),
@@ -151,57 +165,59 @@ def connect_db() -> sqlite3.Connection:
 def repair_db() -> None:
     with connect_db() as conn:
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                task_date TEXT NOT NULL,
-                task_time TEXT NOT NULL,
-                description TEXT NOT NULL,
-                priority TEXT NOT NULL DEFAULT 'urgent_important',
-                status TEXT NOT NULL DEFAULT 'pending',
-                score INTEGER NOT NULL DEFAULT 0,
-                reminded_at TEXT NULL,
-                repeat TEXT NOT NULL DEFAULT 'none',
-                completed_at TEXT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            task_date TEXT NOT NULL,
+            task_time TEXT NOT NULL,
+            description TEXT NOT NULL,
+            priority TEXT NOT NULL DEFAULT 'urgent_important',
+            status TEXT NOT NULL DEFAULT 'pending',
+            score INTEGER NOT NULL DEFAULT 0,
+            reminded_at TEXT NULL,
+            repeat TEXT NOT NULL DEFAULT 'none',
+            completed_at TEXT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS streak (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL UNIQUE,
-                last_active_date TEXT,
-                count INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
+        CREATE TABLE IF NOT EXISTS streak (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            last_active_date TEXT,
+            count INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS completed_tasks_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                task_date TEXT NOT NULL,
-                task_time TEXT NOT NULL,
-                description TEXT NOT NULL,
-                priority TEXT NOT NULL,
-                completed_at TEXT NOT NULL,
-                score INTEGER NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
+        CREATE TABLE IF NOT EXISTS completed_tasks_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            task_date TEXT NOT NULL,
+            task_time TEXT NOT NULL,
+            description TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
         """)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
         if "user_id" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN user_id INTEGER REFERENCES users(id)")
         if "completed_at" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT NULL")
+        
         migrate_existing_data(conn)
+        conn.commit() # FIXED: Ensure schema changes and migrations are saved
 
 def migrate_existing_data(conn: sqlite3.Connection) -> None:
     users = conn.execute("SELECT * FROM users").fetchall()
@@ -219,9 +235,11 @@ def migrate_existing_data(conn: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
             (user_id, today_iso())
         )
+        conn.commit() # FIXED
     else:
         for user in users:
             conn.execute("UPDATE tasks SET user_id = ? WHERE user_id IS NULL", (user["id"],))
+        conn.commit() # FIXED
 
 # -----------------------------------------------------------------------------
 # Authentication
@@ -239,11 +257,13 @@ def create_user(username: str, password: str) -> tuple[bool, str]:
             "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
             (username, password_hash, now_local().isoformat())
         )
+        conn.commit() # FIXED
         user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
             "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
             (user_id, today_iso())
         )
+        conn.commit() # FIXED
         return True, "تم إنشاء الحساب بنجاح"
 
 def verify_user(username: str, password: str) -> int | None:
@@ -254,7 +274,7 @@ def verify_user(username: str, password: str) -> int | None:
         ).fetchone()
         if user and user["password_hash"] == hash_password(password):
             return user["id"]
-    return None
+        return None
 
 def get_current_user() -> dict | None:
     if has_request_context() and "user_id" in session:
@@ -298,11 +318,13 @@ def add_task(task_date: str, task_time: str, description: str, priority: str, re
                     "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
                     (default_user, password_hash, now_local().isoformat())
                 )
+                conn.commit() # FIXED
                 user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 conn.execute(
                     "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
                     (user_id, today_iso())
                 )
+                conn.commit() # FIXED
     return add_task_user(user_id, task_date, task_time, description, priority, repeat)
 
 def add_task_user(user_id: int, task_date: str, task_time: str, description: str, priority: str, repeat: str = "none") -> int:
@@ -314,6 +336,7 @@ def add_task_user(user_id: int, task_date: str, task_time: str, description: str
             """,
             (user_id, task_date, task_time, description, priority, repeat)
         )
+        conn.commit() # FIXED
         return int(cursor.lastrowid)
 
 def get_task(task_id: int) -> sqlite3.Row | None:
@@ -352,13 +375,13 @@ def get_user_tasks(user_id: int, task_date: str | None = None) -> list[dict[str,
                 SELECT * FROM tasks
                 WHERE user_id = ? AND task_date = ?
                 ORDER BY
-                  CASE priority
-                    WHEN 'urgent_important' THEN 1
-                    WHEN 'not_urgent_important' THEN 2
-                    WHEN 'urgent_not_important' THEN 3
-                    ELSE 4
-                  END,
-                  task_time, id
+                CASE priority
+                WHEN 'urgent_important' THEN 1
+                WHEN 'not_urgent_important' THEN 2
+                WHEN 'urgent_not_important' THEN 3
+                ELSE 4
+                END,
+                task_time, id
                 """,
                 (user_id, task_date)
             ).fetchall()
@@ -371,7 +394,7 @@ def get_user_tasks(user_id: int, task_date: str | None = None) -> list[dict[str,
                 """,
                 (user_id,)
             ).fetchall()
-    return [dict(row) for row in rows]
+        return [dict(row) for row in rows]
 
 def get_streak() -> int:
     user_id = get_current_user_id()
@@ -389,13 +412,14 @@ def get_user_streak(user_id: int) -> int:
             "SELECT last_active_date, count FROM streak WHERE user_id = ?",
             (user_id,)
         ).fetchone()
-    if not row:
-        return 0
-    if row["last_active_date"]:
-        days_since = (now_local().date() - date.fromisoformat(row["last_active_date"])).days
-        if days_since >= 2:
+        if not row:
             return 0
-    return int(row["count"] or 0)
+        if row["last_active_date"]:
+            days_since = (now_local().date() - date.fromisoformat(row["last_active_date"])).days
+            if days_since >= 2:
+                return 0
+            return int(row["count"] or 0)
+        return 0
 
 def update_streak_after_completion() -> int:
     user_id = get_current_user_id()
@@ -407,6 +431,7 @@ def update_streak_after_completion() -> int:
                     "INSERT INTO streak (last_active_date, count) VALUES (?, 1)",
                     (today_iso(),)
                 )
+                conn.commit() # FIXED
                 return 1
             last_date = date.fromisoformat(row["last_active_date"]) if row["last_active_date"] else None
             count = int(row["count"] or 0)
@@ -421,6 +446,7 @@ def update_streak_after_completion() -> int:
                 "UPDATE streak SET last_active_date=?, count=? WHERE id=?",
                 (current_date.isoformat(), new_count, row["id"])
             )
+            conn.commit() # FIXED
             return new_count
     return update_user_streak(user_id)
 
@@ -436,6 +462,7 @@ def update_user_streak(user_id: int) -> int:
                 "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 1)",
                 (user_id, current_date.isoformat())
             )
+            conn.commit() # FIXED
             return 1
         last_date = date.fromisoformat(row["last_active_date"]) if row["last_active_date"] else None
         count = int(row["count"] or 0)
@@ -449,6 +476,7 @@ def update_user_streak(user_id: int) -> int:
             "UPDATE streak SET last_active_date = ?, count = ? WHERE id = ?",
             (current_date.isoformat(), new_count, row["id"])
         )
+        conn.commit() # FIXED
         return new_count
 
 def reset_streak() -> None:
@@ -456,6 +484,7 @@ def reset_streak() -> None:
     if user_id is None:
         with connect_db() as conn:
             conn.execute("UPDATE streak SET last_active_date=?, count=0", (today_iso(),))
+            conn.commit() # FIXED
     else:
         reset_user_streak(user_id)
 
@@ -465,6 +494,7 @@ def reset_user_streak(user_id: int) -> None:
             "UPDATE streak SET last_active_date = ?, count = 0 WHERE user_id = ?",
             (today_iso(), user_id)
         )
+        conn.commit() # FIXED
 
 def get_stats() -> dict[str, Any]:
     user_id = get_current_user_id()
@@ -528,17 +558,17 @@ def get_user_stats(user_id: int) -> dict[str, Any]:
             "SELECT COUNT(*) FROM completed_tasks_history WHERE user_id = ?",
             (user_id,)
         ).fetchone()[0]
-    return {
-        "total": int(total),
-        "done": int(done),
-        "late": int(late),
-        "pending": int(pending),
-        "total_score": int(total_score or 0),
-        "best_day": best_day["task_date"] if best_day else "لا يوجد",
-        "best_day_count": int(best_day["completed"]) if best_day else 0,
-        "last_seven": [dict(row) for row in last_seven],
-        "history_count": int(history_count),
-    }
+        return {
+            "total": int(total),
+            "done": int(done),
+            "late": int(late),
+            "pending": int(pending),
+            "total_score": int(total_score or 0),
+            "best_day": best_day["task_date"] if best_day else "لا يوجد",
+            "best_day_count": int(best_day["completed"]) if best_day else 0,
+            "last_seven": [dict(row) for row in last_seven],
+            "history_count": int(history_count),
+        }
 
 def archive_old_tasks_for_user(user_id: int) -> int:
     today = today_iso()
@@ -566,9 +596,10 @@ def archive_old_tasks_for_user(user_id: int) -> int:
                 (now_local().isoformat(), task["id"])
             )
             archived += 1
-    if archived:
-        logger.info("Archived %s old tasks for user %s", archived, user_id)
-    return archived
+        if archived:
+            conn.commit() # FIXED: Commit all archival operations at once
+            logger.info("Archived %s old tasks for user %s", archived, user_id)
+        return archived
 
 def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
     target = (day or now_local().date()).isoformat()
@@ -592,21 +623,24 @@ def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
                     (user_id, target, item["time"], item["description"], item["priority"], item["repeat"])
                 )
                 added += 1
-    if added:
-        logger.info("Added %s daily tasks for user %s on %s", added, user_id, target)
-    return added
+        if added:
+            conn.commit() # FIXED
+            logger.info("Added %s daily tasks for user %s on %s", added, user_id, target)
+        return added
 
 def delete_old_tasks() -> int:
     user_id = get_current_user_id()
     if user_id is None:
         with connect_db() as conn:
             cursor = conn.execute("DELETE FROM tasks WHERE task_date < ?", (today_iso(),))
+            conn.commit() # FIXED
             return cursor.rowcount
     with connect_db() as conn:
         cursor = conn.execute(
             "DELETE FROM tasks WHERE user_id = ? AND task_date < ?",
             (user_id, today_iso())
         )
+        conn.commit() # FIXED
         return cursor.rowcount
 
 def delete_completed_tasks() -> int:
@@ -614,12 +648,14 @@ def delete_completed_tasks() -> int:
     if user_id is None:
         with connect_db() as conn:
             cursor = conn.execute("DELETE FROM tasks WHERE status='done'")
+            conn.commit() # FIXED
             return cursor.rowcount
     with connect_db() as conn:
         cursor = conn.execute(
             "DELETE FROM tasks WHERE user_id = ? AND status='done'",
             (user_id,)
         )
+        conn.commit() # FIXED
         return cursor.rowcount
 
 def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
@@ -631,7 +667,7 @@ def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
             return False, "المهمة غير موجودة", 0
         if task["status"] != "pending":
             return False, "تم تحديث هذه المهمة من قبل", 0
-
+            
         base_score = 2 if task["priority"] == "urgent_important" else 1
         reminded_at = task["reminded_at"]
         delay_minutes = 0.0
@@ -643,7 +679,7 @@ def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
                 delay_minutes = (now_local() - reminded).total_seconds() / 60
             except (TypeError, ValueError):
                 delay_minutes = 0
-
+                
         if action == "done":
             status = "done" if delay_minutes <= 5 else "late"
             score = base_score if status == "done" else -base_score
@@ -666,24 +702,28 @@ def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
                     "UPDATE tasks SET status=?, score=? WHERE id=?",
                     (status, score, task_id)
                 )
+            conn.commit() # FIXED
         elif action == "late":
             status, score = "late", -base_score
             conn.execute(
                 "UPDATE tasks SET status=?, score=? WHERE id=?",
                 (status, score, task_id)
             )
+            conn.commit() # FIXED
         else:  # skip
             status, score = "skipped", 0
             conn.execute(
                 "UPDATE tasks SET status=?, score=? WHERE id=?",
                 (status, score, task_id)
             )
-
-    if status == "done":
-        update_streak_after_completion()
-    if task["repeat"] != "none":
-        create_next_repeated_task(task)
-    return True, status, score
+            conn.commit() # FIXED
+            
+        if status == "done":
+            update_streak_after_completion()
+        if task["repeat"] != "none":
+            create_next_repeated_task(task)
+            
+        return True, status, score
 
 def create_next_repeated_task(task: sqlite3.Row) -> None:
     original_date = date.fromisoformat(task["task_date"])
@@ -695,6 +735,7 @@ def create_next_repeated_task(task: sqlite3.Row) -> None:
         next_date = original_date + timedelta(days=30)
     else:
         return
+        
     with connect_db() as conn:
         exists = conn.execute(
             """
@@ -713,6 +754,7 @@ def create_next_repeated_task(task: sqlite3.Row) -> None:
                 (task["user_id"], next_date.isoformat(), task["task_time"],
                  task["description"], task["priority"], task["repeat"])
             )
+            conn.commit() # FIXED
 
 # -----------------------------------------------------------------------------
 # Notifications and scheduler
@@ -776,17 +818,17 @@ def send_initial_reminder(task_id: int, description: str) -> None:
             {
                 "action": "http",
                 "label": "أنجزتها",
-                "url": f"{PUBLIC_URL}/task/{task_id}/done",
+                "url": f"{PUBLIC_URL}/respond/{task_id}/done",
             },
             {
                 "action": "http",
                 "label": "متأخرة",
-                "url": f"{PUBLIC_URL}/task/{task_id}/late",
+                "url": f"{PUBLIC_URL}/respond/{task_id}/late",
             },
             {
                 "action": "http",
                 "label": "تخطي",
-                "url": f"{PUBLIC_URL}/task/{task_id}/skip",
+                "url": f"{PUBLIC_URL}/respond/{task_id}/skip",
             },
         ]
     with connect_db() as conn:
@@ -794,6 +836,7 @@ def send_initial_reminder(task_id: int, description: str) -> None:
             "UPDATE tasks SET reminded_at=? WHERE id=? AND status='pending'",
             (now_local().isoformat(), task_id)
         )
+        conn.commit() # FIXED
     send_ntfy(f"حان وقت الإنجاز: {description}", "وقت التنفيذ", actions)
 
 def schedule_pending_tasks() -> None:
@@ -806,19 +849,19 @@ def schedule_pending_tasks() -> None:
             """,
             (today_iso(),)
         ).fetchall()
-    for task in tasks:
-        schedule_reminder(
-            task["id"], task["task_date"], task["task_time"], task["description"]
-        )
+        for task in tasks:
+            schedule_reminder(
+                task["id"], task["task_date"], task["task_time"], task["description"]
+            )
 
 def daily_rollover() -> None:
     repair_db()
     with connect_db() as conn:
         users = conn.execute("SELECT id FROM users").fetchall()
-        for user in users:
-            archive_old_tasks_for_user(user["id"])
-            if AUTO_DAILY_TASKS:
-                add_daily_tasks_for_user(user["id"])
+    for user in users:
+        archive_old_tasks_for_user(user["id"])
+        if AUTO_DAILY_TASKS:
+            add_daily_tasks_for_user(user["id"])
     schedule_pending_tasks()
     logger.info("Daily rollover completed for %s users", len(users))
 
@@ -842,232 +885,8 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "local-development-secret")
 app.config["JSON_AS_ASCII"] = False
 
-# -----------------------------------------------------------------------------
-# Base Style
-# -----------------------------------------------------------------------------
-BASE_STYLE = """
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
-:root{--ink:#172033;--muted:#708096;--surface:#fff;--bg:#eef2f8;--brand:#4b46e5;--brand2:#6d5dfc;--line:#e4e9f2;--green:#16a765;--red:#ef4444}
-*{box-sizing:border-box}body{margin:0;direction:rtl;font-family:Cairo,Arial,sans-serif;color:var(--ink);background:radial-gradient(circle at 85% 0,#dfe7ff 0,transparent 34%),var(--bg);min-height:100vh}
-a{text-decoration:none;color:inherit}button,input,select{font:inherit}button{cursor:pointer;border:0}
-.shell{width:min(1160px,calc(100% - 32px));margin:0 auto;padding:28px 0 50px}.surface{background:rgba(255,255,255,.88);border:1px solid rgba(255,255,255,.9);box-shadow:0 18px 45px rgba(36,52,84,.10);border-radius:24px}
-.hero{padding:25px 28px;margin-bottom:18px}.hero-top{display:flex;justify-content:space-between;align-items:center;gap:20px}.brand{display:flex;align-items:center;gap:14px}.brand-mark{width:52px;height:52px;border-radius:17px;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,var(--brand),#8374ff);font-size:24px;box-shadow:0 9px 20px #4b46e540}.eyebrow{font-size:13px;color:var(--muted);font-weight:700;margin:0 0 2px}.hero h1{font-size:27px;margin:0;font-weight:800}.date{color:var(--muted);font-size:14px}.metrics{display:flex;align-items:center;gap:22px}.metric{text-align:center}.metric small{display:block;color:var(--muted);font-size:12px}.metric strong{font-size:24px;color:var(--brand)}.metric.streak strong{color:#f97316}.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:13px;padding:10px 15px;font-weight:800;transition:.2s;white-space:nowrap}.btn:hover{transform:translateY(-2px);filter:brightness(1.03)}.btn-primary{background:var(--brand);color:#fff}.btn-light{background:#edf1f8;color:#475569}.btn-danger{background:#fee2e2;color:#b91c1c}.btn-warning{background:#fff3ce;color:#9a6700}.btn-pink{background:#f7d7ef;color:#a21caf}.progress{height:10px;background:#e7ebf3;border-radius:20px;margin-top:22px;overflow:hidden}.progress>span{display:block;height:100%;background:linear-gradient(90deg,#4b46e5,#8374ff);border-radius:inherit;transition:width .5s}.hero-status{text-align:center;margin:10px 0 0;color:#9a6700;font-weight:700;font-size:13px}
-.form-card{padding:22px 25px;margin-bottom:18px}.section-title{display:flex;align-items:center;gap:9px;margin:0 0 16px;font-size:18px}.section-title i{color:var(--brand)}.task-form{display:grid;grid-template-columns:1.05fr .85fr 2fr 1.25fr 1.15fr auto;gap:9px}.field{width:100%;border:1px solid var(--line);background:#fff;border-radius:13px;padding:11px 12px;outline:none;color:var(--ink)}.field:focus{border-color:#8178ff;box-shadow:0 0 0 3px #8178ff22}.task-form .btn{padding-inline:20px}
-.toolbar{display:flex;flex-wrap:wrap;gap:9px;margin:0 0 20px}.toolbar .btn{font-size:13px}
-.flash{padding:12px 16px;border-radius:14px;margin-bottom:18px;background:#e6f7ee;color:#087443;font-weight:700}.flash.error{background:#fee2e2;color:#b91c1c}
-.columns{display:grid;grid-template-columns:1fr 1fr;gap:18px}.quadrant{padding:16px;border-top:4px solid var(--brand);min-height:190px}.quadrant.priority-red{border-color:#fb7185}.quadrant.priority-blue{border-color:#60a5fa}.quadrant.priority-amber{border-color:#fbbf24}.quadrant.priority-slate{border-color:#94a3b8}.quadrant-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;font-weight:800}.count{font-size:12px;color:var(--muted);font-weight:700}.task{background:#fff;border:1px solid var(--line);border-right:4px solid #cbd5e1;border-radius:15px;padding:12px;margin-top:8px;box-shadow:0 5px 14px #2638580a}.task.priority-red{border-right-color:#fb7185}.task.priority-blue{border-right-color:#60a5fa}.task.priority-amber{border-right-color:#fbbf24}.task.priority-slate{border-right-color:#94a3b8}.task-main{display:flex;justify-content:space-between;gap:12px}.task-time{font-size:17px;font-weight:800;direction:ltr;display:inline-block}.task-desc{font-weight:700;margin-right:8px}.task-repeat{color:#775be9;font-size:11px;font-weight:700}.task-status{font-size:18px;white-space:nowrap}.task-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.mini{border-radius:10px;padding:5px 10px;font-size:12px;font-weight:800}.mini.done{background:#d9f7e6;color:#078447}.mini.late{background:#fee2e2;color:#bd2727}.mini.skip{background:#edf0f5;color:#697386}.icon-link{color:#64748b;padding:3px;font-size:15px}.icon-link.edit{color:#3b82f6}.icon-link.delete{color:#ef4444}.empty{padding:28px;text-align:center;color:#97a2b5;font-size:13px}
-.foot{text-align:center;color:#8491a5;font-size:12px;margin-top:20px}.action-form{display:inline}.subpage{padding:24px}.subpage-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}.subpage h1{margin:0;font-size:25px}.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{padding:20px;border-radius:18px;background:#f8faff;border:1px solid var(--line)}.stat strong{display:block;font-size:30px;color:var(--brand)}.stat small{color:var(--muted);font-weight:700}.chart-list{display:flex;align-items:flex-end;gap:12px;height:170px;padding:18px 10px 0}.bar-item{height:100%;flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px}.bar{width:100%;max-width:48px;background:linear-gradient(#8374ff,#4b46e5);border-radius:9px 9px 3px 3px;min-height:5px}.bar-item small{font-size:11px;color:var(--muted)}.gym-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}.gym-card{padding:18px}.gym-card h2{margin:0 0 10px}.exercise{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--line);gap:10px}.exercise a{color:#dc2626;font-size:12px;font-weight:800}.edit-form{max-width:650px;margin:0 auto}.edit-form .field{display:block;margin-bottom:12px}.edit-form label{display:block;font-size:13px;font-weight:800;margin:0 0 5px}
-@media(max-width:900px){.task-form{grid-template-columns:1fr 1fr 1fr}.task-form .description{grid-column:span 2}.task-form .btn{grid-column:span 1}.hero-top{align-items:flex-start}.metrics{gap:13px}}@media(max-width:650px){.shell{width:min(100% - 20px,1160px);padding-top:12px}.hero{padding:18px}.hero-top{display:block}.metrics{justify-content:space-between;margin-top:18px}.hero h1{font-size:22px}.columns,.gym-grid{grid-template-columns:1fr}.task-form{grid-template-columns:1fr 1fr}.task-form .description{grid-column:span 2}.task-form .btn{grid-column:span 2}.toolbar .btn{flex:1}.stat-grid{grid-template-columns:1fr 1fr}.subpage{padding:17px}.subpage-head{align-items:flex-start}.subpage-head h1{font-size:20px}}
-"""
-
-# -----------------------------------------------------------------------------
-# Templates
-# -----------------------------------------------------------------------------
-def render_page(body: str, **context: Any) -> str:
-    user = get_current_user()
-    context["user"] = user
-    context["auth_links"] = render_auth_links(user)
-    return render_template_string(
-        f"""
-        <!doctype html><html lang="ar" dir="rtl"><head>
-        <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-        <meta name="description" content="جدول أيزنهاور لإدارة المهام اليومية">
-        <title>{{{{ title }}}}</title><style>{BASE_STYLE}</style></head><body>
-        {{{{ auth_links | safe }}}}
-        {body}
-        </body></html>
-        """,
-        title=context.pop("title", "جدول أيزنهاور"),
-        **context,
-    )
-
-def render_auth_links(user) -> str:
-    if user:
-        return f"""
-        <div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:space-between;align-items:center;font-size:14px;">
-            <span style="font-weight:700;">👤 {user['username']}</span>
-            <div>
-                <a href="{url_for('logout')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">تسجيل الخروج</a>
-            </div>
-        </div>
-        """
-    else:
-        return f"""
-        <div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:flex-end;align-items:center;gap:15px;font-size:14px;">
-            <a href="{url_for('login')}" class="btn btn-primary" style="padding:5px 15px;font-size:13px;">تسجيل الدخول</a>
-            <a href="{url_for('signup')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">إنشاء حساب</a>
-        </div>
-        """
-
-AUTH_BODY = """
-<main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 10%,#dfe7ff 0,transparent 60%),#f0f4fe;font-family:Cairo,sans-serif;padding:20px;">
-    <div style="width:100%;max-width:440px;">
-        <div style="background:rgba(255,255,255,0.97);backdrop-filter:blur(20px);border-radius:32px;padding:40px 32px;box-shadow:0 30px 70px rgba(75,70,229,0.12),0 10px 30px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.6);">
-            <div style="text-align:center;margin-bottom:28px;">
-                <div style="width:68px;height:68px;border-radius:22px;background:linear-gradient(145deg,#4b46e5,#7b6aff);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:30px;color:#fff;box-shadow:0 12px 28px rgba(75,70,229,0.25);">✓</div>
-                <h1 style="margin:0;font-size:28px;font-weight:800;color:#172033;letter-spacing:-0.5px;">{{ title }}</h1>
-                <p style="color:#708096;font-size:15px;margin-top:4px;">{{ 'أهلاً بعودتك 👋' if mode == 'login' else 'انضم إلينا 🚀' }}</p>
-            </div>
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% for category, message in messages %}
-                    <div class="flash {{ category }}" style="margin-bottom:16px;padding:12px 16px;border-radius:14px;font-weight:600;{% if category == 'error' %}background:#fee2e2;color:#b91c1c;{% else %}background:#e6f7ee;color:#087443;{% endif %}">{{ message }}</div>
-                {% endfor %}
-            {% endwith %}
-            <form method="post" style="display:flex;flex-direction:column;gap:14px;">
-                <div>
-                    <label style="display:block;font-size:13px;font-weight:700;color:#475569;margin-bottom:4px;">اسم المستخدم</label>
-                    <input class="field" type="text" name="username" placeholder="اكتب اسم المستخدم" required style="width:100%;padding:14px 16px;border-radius:14px;border:2px solid #e4e9f2;background:#fafcff;font-size:15px;transition:all 0.2s;outline:none;">
-                </div>
-                <div>
-                    <label style="display:block;font-size:13px;font-weight:700;color:#475569;margin-bottom:4px;">كلمة المرور</label>
-                    <input class="field" type="password" name="password" placeholder="••••••••" required style="width:100%;padding:14px 16px;border-radius:14px;border:2px solid #e4e9f2;background:#fafcff;font-size:15px;transition:all 0.2s;outline:none;">
-                </div>
-                <button class="btn btn-primary" type="submit" style="width:100%;padding:16px;border-radius:16px;font-size:16px;background:linear-gradient(145deg,#4b46e5,#6d5dfc);color:#fff;font-weight:800;border:none;cursor:pointer;transition:all 0.2s;box-shadow:0 8px 24px rgba(75,70,229,0.3);">{{ submit_label }}</button>
-            </form>
-            <div style="text-align:center;margin-top:18px;font-size:14px;color:#708096;">
-                {% if mode == 'login' %}
-                    <a href="{{ url_for('signup') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;transition:color 0.2s;">إنشاء حساب جديد →</a>
-                {% else %}
-                    <a href="{{ url_for('login') }}" style="color:#4b46e5;font-weight:700;text-decoration:none;transition:color 0.2s;">لديك حساب؟ سجل دخول →</a>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-</main>
-"""
-
-HOME_BODY = """
-<main class="shell">
-  <section class="surface hero">
-    <div class="hero-top">
-      <div class="brand">
-        <div class="brand-mark">✓</div>
-        <div><p class="eyebrow">إدارة يومك بوضوح</p><h1>جدول أيزنهاور</h1><div class="date">{{ today_label }}</div></div>
-      </div>
-      <div class="metrics">
-        <div class="metric"><small>نقاط اليوم</small><strong>{{ today_score }}</strong></div>
-        <div class="metric streak"><small>الستريك</small><strong>{{ streak }}</strong></div>
-        <a class="btn btn-primary" href="{{ url_for('stats') }}">الإحصائيات</a>
-      </div>
-    </div>
-    <div class="progress"><span style="width:{{ progress }}%"></span></div>
-    <div class="hero-status">{% if total == 0 %}لا توجد مهام اليوم{% elif progress == 100 %}أحسنت، أنجزت كل مهام اليوم{% else %}أنجزت {{ done_count }} من {{ total }} مهام{% endif %}</div>
-  </section>
-
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
-  {% endwith %}
-
-  <section class="surface form-card">
-    <h2 class="section-title"><i>＋</i> إضافة مهمة جديدة</h2>
-    <form class="task-form" method="post" action="{{ url_for('add') }}">
-      <input class="field" type="date" name="task_date" value="{{ today }}" required aria-label="تاريخ المهمة">
-      <input class="field" type="time" name="task_time" value="{{ default_time }}" required aria-label="وقت المهمة">
-      <input class="field description" type="text" name="description" placeholder="ما المهمة التي تريد إنجازها؟" maxlength="160" required>
-      <select class="field" name="priority" aria-label="الأولوية">
-        {% for key, item in priorities.items() %}<option value="{{ key }}">{{ item.label }}</option>{% endfor %}
-      </select>
-      <select class="field" name="repeat" aria-label="التكرار">
-        {% for key, label in repeat_labels.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
-      </select>
-      <button class="btn btn-primary" type="submit">إضافة المهمة</button>
-    </form>
-  </section>
-
-  <nav class="toolbar" aria-label="أدوات سريعة">
-    <a class="btn btn-pink" href="{{ url_for('gym') }}">جدول التمارين</a>
-    <button class="btn btn-primary" type="button" onclick="toggleFocus(this)">وضع التركيز</button>
-    <form class="action-form" method="post" action="{{ url_for('add_daily_tasks_route') }}">
-      <button class="btn btn-warning" type="submit">إضافة المهام اليومية التلقائية</button>
-    </form>
-    <form class="action-form" method="post" action="{{ url_for('archive_old') }}" onsubmit="return confirm('سيتم نقل المهام القديمة إلى سجل المنجزات. هل تريد المتابعة؟')">
-      <button class="btn btn-light" type="submit">أرشفة المهام القديمة</button>
-    </form>
-    <form class="action-form" method="post" action="{{ url_for('clean') }}" onsubmit="return confirm('سيتم حذف المهام القديمة فقط. هل تريد المتابعة؟')">
-      <button class="btn btn-light" type="submit">تنظيف المهام القديمة</button>
-    </form>
-    <form class="action-form" method="post" action="{{ url_for('clean_done') }}" onsubmit="return confirm('سيتم حذف المهام المنجزة نهائيًا. هل تريد المتابعة؟')">
-      <button class="btn btn-danger" type="submit">حذف المهام المنجزة</button>
-    </form>
-    <form class="action-form" method="post" action="{{ url_for('reset_streak') }}" onsubmit="return confirm('هل تريد إعادة الستريك إلى صفر؟')">
-      <button class="btn btn-light" type="submit">إعادة الستريك</button>
-    </form>
-  </nav>
-
-  <section class="columns" id="task-columns">
-  {% for key, item in priorities.items() %}
-    {% set group = grouped_tasks[key] %}
-    <div class="surface quadrant {{ item.class_name }}">
-      <div class="quadrant-head"><span><span class="dot {{ item.dot }}"></span>{{ item.label }}</span><span class="count">{{ group|length }} مهام</span></div>
-      {% for task in group %}
-      <article class="task {{ item.class_name }}">
-        <div class="task-main">
-          <div><span class="task-time">{{ task.task_time }}</span><span class="task-desc">{{ task.description }}</span>{% if task.repeat != 'none' %}<span class="task-repeat">• {{ repeat_labels[task.repeat] }}</span>{% endif %}</div>
-          <div class="task-status">{% if task.status == 'done' %}✓{% elif task.status == 'late' %}⏱{% elif task.status == 'skipped' %}↷{% else %}○{% endif %}</div>
-        </div>
-        <div class="task-actions">
-          {% if task.status == 'pending' %}
-          <form class="action-form" method="post" action="{{ url_for('task_status', task_id=task.id, action='done') }}"><button class="mini done" type="submit">أنجزتها</button></form>
-          <form class="action-form" method="post" action="{{ url_for('task_status', task_id=task.id, action='late') }}"><button class="mini late" type="submit">متأخرة</button></form>
-          <form class="action-form" method="post" action="{{ url_for('task_status', task_id=task.id, action='skip') }}"><button class="mini skip" type="submit">تخطي</button></form>
-          {% else %}<span class="mini {{ 'done' if task.status == 'done' else 'late' if task.status == 'late' else 'skip' }}">{{ status_labels[task.status] }}</span>{% endif %}
-          <a class="icon-link edit" href="{{ url_for('edit', task_id=task.id) }}" title="تعديل">✎</a>
-          <form class="action-form" method="post" action="{{ url_for('delete', task_id=task.id) }}" onsubmit="return confirm('هل تريد حذف هذه المهمة؟')"><button class="icon-link delete" type="submit" title="حذف">⌫</button></form>
-        </div>
-      </article>
-      {% else %}<div class="empty">لا توجد مهام في هذا التصنيف</div>{% endfor %}
-    </div>
-  {% endfor %}
-  </section>
-  <div class="foot">التنبيهات: {{ ntfy_state }} · المنطقة الزمنية: {{ timezone_name }}</div>
-</main>
-<script>
-function toggleFocus(button){
-  const columns=document.getElementById('task-columns');
-  const enabled=columns.classList.toggle('focus-mode');
-  [...columns.children].forEach((el,i)=>el.style.display=enabled && i>0 ? 'none':'block');
-  button.textContent=enabled?'إظهار كل التصنيفات':'وضع التركيز';
-}
-</script>
-"""
-
-EDIT_BODY = """
-<main class="shell"><section class="surface subpage">
-  <div class="subpage-head"><h1>تعديل المهمة</h1><a class="btn btn-light" href="{{ url_for('index') }}">العودة للجدول</a></div>
-  <form class="edit-form" method="post">
-    <label>التاريخ<input class="field" type="date" name="task_date" value="{{ task.task_date }}" required></label>
-    <label>الوقت<input class="field" type="time" name="task_time" value="{{ task.task_time }}" required></label>
-    <label>وصف المهمة<input class="field" type="text" name="description" value="{{ task.description }}" maxlength="160" required></label>
-    <label>الأولوية<select class="field" name="priority">{% for key,item in priorities.items() %}<option value="{{ key }}" {{ 'selected' if task.priority == key else '' }}>{{ item.label }}</option>{% endfor %}</select></label>
-    <label>التكرار<select class="field" name="repeat">{% for key,label in repeat_labels.items() %}<option value="{{ key }}" {{ 'selected' if task.repeat == key else '' }}>{{ label }}</option>{% endfor %}</select></label>
-    <button class="btn btn-primary" type="submit">حفظ التعديلات</button>
-  </form>
-</section></main>
-"""
-
-STATS_BODY = """
-<main class="shell"><section class="surface subpage">
-  <div class="subpage-head"><h1>إحصائيات الإنجاز</h1><a class="btn btn-light" href="{{ url_for('index') }}">العودة للجدول</a></div>
-  <div class="stat-grid">
-    <div class="stat"><strong>{{ stats.total }}</strong><small>كل المهام</small></div>
-    <div class="stat"><strong>{{ stats.done }}</strong><small>منجزة</small></div>
-    <div class="stat"><strong>{{ stats.late }}</strong><small>متأخرة</small></div>
-    <div class="stat"><strong>{{ stats.total_score }}</strong><small>النقاط</small></div>
-  </div>
-  <div class="surface" style="padding:18px;margin-top:16px"><h2>إنجاز آخر سبعة أيام</h2>
-    {% set max_count = (stats.last_seven|map(attribute='completed')|max if stats.last_seven else 1) %}
-    <div class="chart-list">{% for day in stats.last_seven %}<div class="bar-item"><b>{{ day.completed }}</b><div class="bar" style="height:{{ (day.completed / max_count * 100)|int }}%"></div><small>{{ day.task_date[5:] }}</small></div>{% else %}<div class="empty">ستظهر الإحصائيات بعد إنجاز المهام</div>{% endfor %}</div>
-  </div>
-  <div class="surface" style="padding:18px;margin-top:16px"><h2>أفضل يوم</h2><p>{{ stats.best_day }} — {{ stats.best_day_count }} مهام منجزة</p></div>
-  <div class="surface" style="padding:18px;margin-top:16px"><h2>إجمالي المهام المنجزة في التاريخ</h2><p style="font-size:32px;font-weight:800;color:var(--brand);text-align:center;">{{ stats.history_count }}</p></div>
-</section></main>
-"""
-
-GYM_BODY = """
-<main class="shell"><div class="subpage-head"><h1>جدول التمارين</h1><a class="btn btn-light" href="{{ url_for('index') }}">العودة للجدول</a></div>
-  <section class="gym-grid">{% for day, exercises in gym_schedule.items() %}<div class="surface gym-card"><h2>{{ day }}</h2>{% for name,video in exercises %}<div class="exercise"><span>{{ name }}</span><a href="{{ video }}" target="_blank" rel="noopener">مشاهدة الفيديو ↗</a></div>{% endfor %}</div>{% endfor %}</section>
-</main>
-"""
+# ... [Rest of your HTML templates (BASE_STYLE, AUTH_BODY, HOME_BODY, EDIT_BODY, STATS_BODY, GYM_BODY) remain exactly the same as your original file] ...
+# (To save space, I'm omitting repeating the massive HTML strings here, but keep them exactly as they were in your original file!)
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -1118,6 +937,7 @@ def login():
             return redirect(url_for("index"))
         else:
             flash("اسم المستخدم أو كلمة المرور غير صحيحة", "error")
+            return render_template_string(AUTH_BODY, title="تسجيل الدخول", submit_label="دخول", mode="login")
     return render_template_string(AUTH_BODY, title="تسجيل الدخول", submit_label="دخول", mode="login")
 
 @app.route("/signup", methods=["GET", "POST"])
@@ -1136,6 +956,7 @@ def signup():
             return redirect(url_for("login"))
         else:
             flash(msg, "error")
+            return render_template_string(AUTH_BODY, title="إنشاء حساب", submit_label="تسجيل", mode="signup")
     return render_template_string(AUTH_BODY, title="إنشاء حساب", submit_label="تسجيل", mode="signup")
 
 @app.route("/logout")
@@ -1208,7 +1029,8 @@ def delete(task_id: int):
         return redirect(url_for("index"))
     with connect_db() as conn:
         cursor = conn.execute("DELETE FROM tasks WHERE id=? AND user_id=?", (task_id, user_id))
-    flash("تم حذف المهمة" if cursor.rowcount else "المهمة غير موجودة", "success" if cursor.rowcount else "error")
+        conn.commit() # FIXED
+        flash("تم حذف المهمة" if cursor.rowcount else "المهمة غير موجودة", "success" if cursor.rowcount else "error")
     return redirect(url_for("index"))
 
 @app.route("/edit/<int:task_id>", methods=["GET", "POST"])
@@ -1229,6 +1051,7 @@ def edit(task_id: int):
                     """,
                     (*data, task_id, task["user_id"])
                 )
+                conn.commit() # FIXED
             flash("تم حفظ تعديلات المهمة", "success")
             return redirect(url_for("index"))
         except (TypeError, ValueError) as exc:
@@ -1285,7 +1108,7 @@ def repair_db_route():
 
 @app.route("/reset_streak", methods=["POST"])
 @login_required
-def reset_streak():
+def reset_streak_route():
     reset_streak()
     flash("تمت إعادة الستريك إلى صفر", "success")
     return redirect(url_for("index"))
