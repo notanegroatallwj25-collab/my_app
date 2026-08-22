@@ -36,7 +36,11 @@ except pytz.UnknownTimeZoneError:
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "my_scheduler_fixed")
 NTFY_ENABLED = os.environ.get("NTFY_ENABLED", "1").lower() not in {"0", "false", "no"}
-PUBLIC_URL = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("BASE_URL", "")).rstrip("/")
+PUBLIC_URL = (
+    os.environ.get("PUBLIC_URL")
+    or os.environ.get("RENDER_EXTERNAL_URL")
+    or os.environ.get("BASE_URL", "")
+).rstrip("/")
 AUTO_DAILY_TASKS = os.environ.get("AUTO_DAILY_TASKS", "1").lower() not in {"0", "false", "no"}
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s - %(levelname)s - %(message)s")
@@ -44,7 +48,7 @@ logger = logging.getLogger("eisenhower-scheduler")
 logger.info(f"Database initialized at: {DB_NAME.resolve()}")
 
 # -----------------------------------------------------------------------------
-# Content & Constants (يمكنك تعديل المهام التلقائية هنا)
+# Content & Constants
 # -----------------------------------------------------------------------------
 PRIORITIES = {
     "urgent_important": {"label": "عاجل ومهم", "short": "عاجل ومهم", "class_name": "priority-red", "dot": "red", "sort": 1},
@@ -56,7 +60,7 @@ PRIORITIES = {
 REPEAT_LABELS = {"none": "مرة واحدة", "daily": "يومي", "weekly": "أسبوعي", "monthly": "شهري"}
 STATUS_LABELS = {"pending": "معلقة", "done": "منجزة", "late": "متأخرة", "skipped": "متخطاة"}
 
-# ✅ هنا يمكنك تعديل المهام التلقائية اليومية حسب روتينك
+# ✅ DAILY TASKS - Edit these to match your daily routine!
 DAILY_TASKS = [
     {"time": "08:00", "description": "مراجعة الأهداف اليومية", "priority": "urgent_important", "repeat": "daily"},
     {"time": "14:00", "description": "استراحة ومراجعة", "priority": "not_urgent_important", "repeat": "daily"},
@@ -95,8 +99,11 @@ GYM_SCHEDULE = {
     ],
 }
 
-def now_local() -> datetime: return datetime.now(LOCAL_TZ)
-def today_iso() -> str: return now_local().date().isoformat()
+def now_local() -> datetime:
+    return datetime.now(LOCAL_TZ)
+
+def today_iso() -> str:
+    return now_local().date().isoformat()
 
 # -----------------------------------------------------------------------------
 # Database
@@ -111,15 +118,61 @@ def connect_db() -> sqlite3.Connection:
 
 def repair_db() -> None:
     with connect_db() as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)")
-        conn.execute("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, task_date TEXT NOT NULL, task_time TEXT NOT NULL, description TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'urgent_important', status TEXT NOT NULL DEFAULT 'pending', score INTEGER NOT NULL DEFAULT 0, reminded_at TEXT NULL, repeat TEXT NOT NULL DEFAULT 'none', completed_at TEXT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
-        conn.execute("CREATE TABLE IF NOT EXISTS streak (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL UNIQUE, last_active_date TEXT, count INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
-        conn.execute("CREATE TABLE IF NOT EXISTS completed_tasks_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, task_date TEXT NOT NULL, task_time TEXT NOT NULL, description TEXT NOT NULL, priority TEXT NOT NULL, completed_at TEXT NOT NULL, score INTEGER NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            task_date TEXT NOT NULL,
+            task_time TEXT NOT NULL,
+            description TEXT NOT NULL,
+            priority TEXT NOT NULL DEFAULT 'urgent_important',
+            status TEXT NOT NULL DEFAULT 'pending',
+            score INTEGER NOT NULL DEFAULT 0,
+            reminded_at TEXT NULL,
+            repeat TEXT NOT NULL DEFAULT 'none',
+            completed_at TEXT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS streak (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            last_active_date TEXT,
+            count INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS completed_tasks_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            task_date TEXT NOT NULL,
+            task_time TEXT NOT NULL,
+            description TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """)
         
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
-        if "user_id" not in columns: conn.execute("ALTER TABLE tasks ADD COLUMN user_id INTEGER REFERENCES users(id)")
-        if "completed_at" not in columns: conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT NULL")
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        if "completed_at" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT NULL")
+        
         migrate_existing_data(conn)
+        conn.commit()  # ✅ SAVE SCHEMA CHANGES
 
 def migrate_existing_data(conn: sqlite3.Connection) -> None:
     users = conn.execute("SELECT * FROM users").fetchall()
@@ -127,43 +180,64 @@ def migrate_existing_data(conn: sqlite3.Connection) -> None:
         default_user = os.environ.get("DEFAULT_USER", "sh3sh3edition")
         default_pass = os.environ.get("DEFAULT_PASS", "hshsedu444")
         password_hash = hashlib.sha256(default_pass.encode()).hexdigest()
-        conn.execute("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)", (default_user, password_hash, now_local().isoformat()))
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (default_user, password_hash, now_local().isoformat())
+        )
         user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute("UPDATE tasks SET user_id = ? WHERE user_id IS NULL", (user_id,))
-        conn.execute("INSERT OR IGNORE INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)", (user_id, today_iso()))
-        conn.commit()
+        conn.execute(
+            "INSERT OR IGNORE INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
+            (user_id, today_iso())
+        )
+        conn.commit()  # ✅ SAVE MIGRATION
     else:
         for user in users:
             conn.execute("UPDATE tasks SET user_id = ? WHERE user_id IS NULL", (user["id"],))
-        conn.commit()
+        conn.commit()  # ✅ SAVE MIGRATION
 
 # -----------------------------------------------------------------------------
 # Authentication
 # -----------------------------------------------------------------------------
-def hash_password(password: str) -> str: return hashlib.sha256(password.encode()).hexdigest()
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def create_user(username: str, password: str) -> tuple[bool, str]:
     with connect_db() as conn:
         if conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone():
             return False, "اسم المستخدم موجود بالفعل"
         password_hash = hash_password(password)
-        conn.execute("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)", (username, password_hash, now_local().isoformat()))
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (username, password_hash, now_local().isoformat())
+        )
         user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        conn.execute("INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)", (user_id, today_iso()))
-        conn.commit()
+        conn.execute(
+            "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
+            (user_id, today_iso())
+        )
+        conn.commit()  # ✅ SAVE NEW USER
         return True, "تم إنشاء الحساب بنجاح"
 
 def verify_user(username: str, password: str) -> int | None:
     with connect_db() as conn:
-        user = conn.execute("SELECT id, password_hash FROM users WHERE username = ?", (username,)).fetchone()
-        if user and user["password_hash"] == hash_password(password): return user["id"]
+        user = conn.execute(
+            "SELECT id, password_hash FROM users WHERE username = ?",
+            (username,)
+        ).fetchone()
+        if user and user["password_hash"] == hash_password(password):
+            return user["id"]
     return None
 
 def get_current_user() -> dict | None:
     if has_request_context() and "user_id" in session:
         with connect_db() as conn:
-            user = conn.execute("SELECT id, username, created_at FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-            if user: return dict(user)
+            user = conn.execute(
+                "SELECT id, username, created_at FROM users WHERE id = ?",
+                (session["user_id"],)
+            ).fetchone()
+            if user:
+                return dict(user)
     return None
 
 def login_required(f):
@@ -176,7 +250,7 @@ def login_required(f):
     return decorated_function
 
 # -----------------------------------------------------------------------------
-# Database Functions
+# Database Functions (User-aware)
 # -----------------------------------------------------------------------------
 def get_current_user_id() -> int | None:
     user = get_current_user()
@@ -190,31 +264,56 @@ def add_task(task_date: str, task_time: str, description: str, priority: str, re
             if user:
                 user_id = user["id"]
             else:
-                password_hash = hash_password(os.environ.get("DEFAULT_PASS", "hshsedu444"))
-                conn.execute("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)", (os.environ.get("DEFAULT_USER", "sh3sh3edition"), password_hash, now_local().isoformat()))
+                default_user = os.environ.get("DEFAULT_USER", "sh3sh3edition")
+                default_pass = os.environ.get("DEFAULT_PASS", "hshsedu444")
+                password_hash = hash_password(default_pass)
+                conn.execute(
+                    "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                    (default_user, password_hash, now_local().isoformat())
+                )
                 user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                conn.execute("INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)", (user_id, today_iso()))
-                conn.commit()
+                conn.execute(
+                    "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 0)",
+                    (user_id, today_iso())
+                )
+                conn.commit()  # ✅ SAVE DEFAULT USER
     return add_task_user(user_id, task_date, task_time, description, priority, repeat)
 
 def add_task_user(user_id: int, task_date: str, task_time: str, description: str, priority: str, repeat: str = "none") -> int:
     with connect_db() as conn:
-        cursor = conn.execute("INSERT INTO tasks (user_id, task_date, task_time, description, priority, repeat) VALUES (?, ?, ?, ?, ?, ?)", (user_id, task_date, task_time, description, priority, repeat))
-        conn.commit()
+        cursor = conn.execute(
+            """
+            INSERT INTO tasks (user_id, task_date, task_time, description, priority, repeat)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, task_date, task_time, description, priority, repeat)
+        )
+        conn.commit()  # ✅ SAVE NEW TASK
         return int(cursor.lastrowid)
 
 def get_task(task_id: int) -> sqlite3.Row | None:
     user_id = get_current_user_id()
     with connect_db() as conn:
-        if user_id is None: return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if user_id is None:
+            return conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         return conn.execute("SELECT * FROM tasks WHERE id=? AND user_id=?", (task_id, user_id)).fetchone()
 
 def get_user_tasks(user_id: int, task_date: str | None = None) -> list[dict[str, Any]]:
     with connect_db() as conn:
         if task_date:
-            rows = conn.execute("SELECT * FROM tasks WHERE user_id = ? AND task_date = ? ORDER BY CASE priority WHEN 'urgent_important' THEN 1 WHEN 'not_urgent_important' THEN 2 WHEN 'urgent_not_important' THEN 3 ELSE 4 END, task_time, id", (user_id, task_date)).fetchall()
+            rows = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE user_id = ? AND task_date = ?
+                ORDER BY CASE priority WHEN 'urgent_important' THEN 1 WHEN 'not_urgent_important' THEN 2 WHEN 'urgent_not_important' THEN 3 ELSE 4 END, task_time, id
+                """,
+                (user_id, task_date)
+            ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM tasks WHERE user_id = ? ORDER BY task_date, task_time", (user_id,)).fetchall()
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE user_id = ? ORDER BY task_date, task_time",
+                (user_id,)
+            ).fetchall()
         return [dict(row) for row in rows]
 
 def get_today_tasks() -> list[dict[str, Any]]:
@@ -227,7 +326,8 @@ def get_today_tasks() -> list[dict[str, Any]]:
 def get_user_streak(user_id: int) -> int:
     with connect_db() as conn:
         row = conn.execute("SELECT last_active_date, count FROM streak WHERE user_id = ?", (user_id,)).fetchone()
-        if not row or not row["last_active_date"]: return 0
+        if not row or not row["last_active_date"]:
+            return 0
         days_since = (now_local().date() - date.fromisoformat(row["last_active_date"])).days
         return int(row["count"] or 0) if days_since < 2 else 0
 
@@ -238,33 +338,44 @@ def get_streak() -> int:
             row = conn.execute("SELECT last_active_date, count FROM streak ORDER BY id LIMIT 1").fetchone()
             if row and row["last_active_date"] and (now_local().date() - date.fromisoformat(row["last_active_date"])).days < 2:
                 return int(row["count"] or 0)
-        return 0
-    return get_user_streak(user_id)
+    return get_user_streak(user_id) if user_id else 0
 
 def update_streak_after_completion() -> int:
     user_id = get_current_user_id()
     current_date = now_local().date()
     with connect_db() as conn:
-        row = conn.execute("SELECT id, last_active_date, count FROM streak WHERE user_id = ?" if user_id else "SELECT id, last_active_date, count FROM streak ORDER BY id LIMIT 1", (user_id,) if user_id else ()).fetchone()
+        row = conn.execute(
+            "SELECT id, last_active_date, count FROM streak WHERE user_id = ?" if user_id else "SELECT id, last_active_date, count FROM streak ORDER BY id LIMIT 1",
+            (user_id,) if user_id else ()
+        ).fetchone()
         if not row:
-            conn.execute("INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 1)", (user_id, current_date.isoformat()) if user_id else (None, current_date.isoformat()))
-            conn.commit()
+            conn.execute(
+                "INSERT INTO streak (user_id, last_active_date, count) VALUES (?, ?, 1)",
+                (user_id, current_date.isoformat()) if user_id else (None, current_date.isoformat())
+            )
+            conn.commit()  # ✅ SAVE NEW STREAK
             return 1
         last_date = date.fromisoformat(row["last_active_date"]) if row["last_active_date"] else None
         count = int(row["count"] or 0)
         new_count = max(count, 1) if last_date == current_date else (count + 1 if last_date == current_date - timedelta(days=1) else 1)
-        conn.execute("UPDATE streak SET last_active_date = ?, count = ? WHERE id = ?", (current_date.isoformat(), new_count, row["id"]))
-        conn.commit()
+        conn.execute(
+            "UPDATE streak SET last_active_date = ?, count = ? WHERE id = ?",
+            (current_date.isoformat(), new_count, row["id"])
+        )
+        conn.commit()  # ✅ UPDATE STREAK
         return new_count
 
-def do_reset_streak() -> None: # ✅ تم تغيير الاسم لتجنب التعارض مع اسم المسار
+def do_reset_streak() -> None:
     user_id = get_current_user_id()
     with connect_db() as conn:
         if user_id is None:
             conn.execute("UPDATE streak SET last_active_date=?, count=0", (today_iso(),))
         else:
-            conn.execute("UPDATE streak SET last_active_date = ?, count = 0 WHERE user_id = ?", (today_iso(), user_id))
-        conn.commit()
+            conn.execute(
+                "UPDATE streak SET last_active_date = ?, count = 0 WHERE user_id = ?",
+                (today_iso(), user_id)
+            )
+        conn.commit()  # ✅ SAVE RESET
 
 def get_stats() -> dict[str, Any]:
     user_id = get_current_user_id()
@@ -276,22 +387,54 @@ def get_stats() -> dict[str, Any]:
         late = conn.execute(f"SELECT COUNT(*) FROM tasks {query_user} AND status='late'", params).fetchone()[0]
         pending = conn.execute(f"SELECT COUNT(*) FROM tasks {query_user} AND status IN ('pending','skipped')", params).fetchone()[0]
         total_score = conn.execute(f"SELECT COALESCE(SUM(score), 0) FROM tasks {query_user}", params).fetchone()[0]
-        best_day = conn.execute(f"SELECT task_date, COUNT(*) AS completed FROM tasks {query_user} AND status='done' GROUP BY task_date ORDER BY completed DESC, task_date DESC LIMIT 1", params).fetchone()
-        last_seven = conn.execute(f"SELECT task_date, COUNT(*) AS completed FROM tasks {query_user} AND status='done' AND task_date >= ? GROUP BY task_date ORDER BY task_date", params + ((now_local().date() - timedelta(days=6)).isoformat(),)).fetchall()
+        best_day = conn.execute(f"""
+            SELECT task_date, COUNT(*) AS completed
+            FROM tasks {query_user} AND status='done'
+            GROUP BY task_date ORDER BY completed DESC, task_date DESC LIMIT 1
+        """, params).fetchone()
+        last_seven = conn.execute(f"""
+            SELECT task_date, COUNT(*) AS completed
+            FROM tasks {query_user} AND status='done' AND task_date >= ?
+            GROUP BY task_date ORDER BY task_date
+        """, params + ((now_local().date() - timedelta(days=6)).isoformat(),)).fetchall()
         history_count = conn.execute(f"SELECT COUNT(*) FROM completed_tasks_history {query_user}", params).fetchone()[0]
-        return {"total": int(total), "done": int(done), "late": int(late), "pending": int(pending), "total_score": int(total_score or 0), "best_day": best_day["task_date"] if best_day else "لا يوجد", "best_day_count": int(best_day["completed"]) if best_day else 0, "last_seven": [dict(row) for row in last_seven], "history_count": int(history_count)}
+        return {
+            "total": int(total), "done": int(done), "late": int(late), "pending": int(pending),
+            "total_score": int(total_score or 0),
+            "best_day": best_day["task_date"] if best_day else "لا يوجد",
+            "best_day_count": int(best_day["completed"]) if best_day else 0,
+            "last_seven": [dict(row) for row in last_seven],
+            "history_count": int(history_count),
+        }
 
 def archive_old_tasks_for_user(user_id: int) -> int:
     today = today_iso()
     archived = 0
     with connect_db() as conn:
-        old_tasks = conn.execute("SELECT * FROM tasks WHERE user_id = ? AND task_date < ? AND status IN ('pending', 'late', 'skipped')", (user_id, today)).fetchall()
+        old_tasks = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE user_id = ? AND task_date < ? AND status IN ('pending', 'late', 'skipped')
+            """,
+            (user_id, today)
+        ).fetchall()
         for task in old_tasks:
-            conn.execute("INSERT INTO completed_tasks_history (user_id, task_date, task_time, description, priority, completed_at, score) VALUES (?, ?, ?, ?, ?, ?, ?)", (task["user_id"], task["task_date"], task["task_time"], task["description"], task["priority"], now_local().isoformat(), 0))
-            conn.execute("UPDATE tasks SET status='done', completed_at=? WHERE id=?", (now_local().isoformat(), task["id"]))
+            conn.execute(
+                """
+                INSERT INTO completed_tasks_history
+                (user_id, task_date, task_time, description, priority, completed_at, score)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (task["user_id"], task["task_date"], task["task_time"],
+                 task["description"], task["priority"], now_local().isoformat(), 0)
+            )
+            conn.execute(
+                "UPDATE tasks SET status='done', completed_at=? WHERE id=?",
+                (now_local().isoformat(), task["id"])
+            )
             archived += 1
         if archived:
-            conn.commit()
+            conn.commit()  # ✅ SAVE ARCHIVED TASKS
             logger.info("Archived %s old tasks for user %s", archived, user_id)
     return archived
 
@@ -300,66 +443,136 @@ def add_daily_tasks_for_user(user_id: int, day: date | None = None) -> int:
     added = 0
     with connect_db() as conn:
         for item in DAILY_TASKS:
-            exists = conn.execute("SELECT id FROM tasks WHERE user_id = ? AND task_date = ? AND task_time = ? AND description = ? LIMIT 1", (user_id, target, item["time"], item["description"])).fetchone()
+            exists = conn.execute(
+                """
+                SELECT id FROM tasks
+                WHERE user_id = ? AND task_date = ? AND task_time = ? AND description = ?
+                LIMIT 1
+                """,
+                (user_id, target, item["time"], item["description"])
+            ).fetchone()
             if not exists:
-                conn.execute("INSERT INTO tasks (user_id, task_date, task_time, description, priority, repeat) VALUES (?, ?, ?, ?, ?, ?)", (user_id, target, item["time"], item["description"], item["priority"], item["repeat"]))
+                conn.execute(
+                    """
+                    INSERT INTO tasks (user_id, task_date, task_time, description, priority, repeat)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (user_id, target, item["time"], item["description"], item["priority"], item["repeat"])
+                )
                 added += 1
         if added:
-            conn.commit()
+            conn.commit()  # ✅ SAVE DAILY TASKS
             logger.info("Added %s daily tasks for user %s on %s", added, user_id, target)
     return added
 
 def delete_old_tasks() -> int:
     user_id = get_current_user_id()
     with connect_db() as conn:
-        cursor = conn.execute("DELETE FROM tasks WHERE user_id = ? AND task_date < ?" if user_id else "DELETE FROM tasks WHERE task_date < ?", (user_id, today_iso()) if user_id else (today_iso(),))
-        conn.commit()
+        cursor = conn.execute(
+            "DELETE FROM tasks WHERE user_id = ? AND task_date < ?" if user_id else "DELETE FROM tasks WHERE task_date < ?",
+            (user_id, today_iso()) if user_id else (today_iso(),)
+        )
+        conn.commit()  # ✅ SAVE DELETION
         return cursor.rowcount
 
 def delete_completed_tasks() -> int:
     user_id = get_current_user_id()
     with connect_db() as conn:
-        cursor = conn.execute("DELETE FROM tasks WHERE user_id = ? AND status='done'" if user_id else "DELETE FROM tasks WHERE status='done'", (user_id,) if user_id else ())
-        conn.commit()
+        cursor = conn.execute(
+            "DELETE FROM tasks WHERE user_id = ? AND status='done'" if user_id else "DELETE FROM tasks WHERE status='done'",
+            (user_id,) if user_id else ()
+        )
+        conn.commit()  # ✅ SAVE DELETION
         return cursor.rowcount
 
 def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
-    if action not in {"done", "late", "skip"}: return False, "إجراء غير معروف", 0
+    if action not in {"done", "late", "skip"}:
+        return False, "إجراء غير معروف", 0
     with connect_db() as conn:
         task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not task or task["status"] != "pending": return False, "المهمة غير موجودة أو تم تحديثها", 0
+        if not task or task["status"] != "pending":
+            return False, "المهمة غير موجودة أو تم تحديثها", 0
         
         base_score = 2 if task["priority"] == "urgent_important" else 1
         delay_minutes = 0.0
         if task["reminded_at"]:
             try:
                 reminded = datetime.fromisoformat(task["reminded_at"])
-                if reminded.tzinfo is None: reminded = LOCAL_TZ.localize(reminded)
+                if reminded.tzinfo is None:
+                    reminded = LOCAL_TZ.localize(reminded)
                 delay_minutes = (now_local() - reminded).total_seconds() / 60
-            except (TypeError, ValueError): pass
+            except (TypeError, ValueError):
+                pass
                 
         if action == "done":
             status = "done" if delay_minutes <= 5 else "late"
             score = base_score if status == "done" else -base_score
             if status == "done":
-                conn.execute("INSERT INTO completed_tasks_history (user_id, task_date, task_time, description, priority, completed_at, score) VALUES (?, ?, ?, ?, ?, ?, ?)", (task["user_id"], task["task_date"], task["task_time"], task["description"], task["priority"], now_local().isoformat(), score))
-                conn.execute("UPDATE tasks SET status=?, score=?, completed_at=? WHERE id=?", (status, score, now_local().isoformat(), task_id))
+                conn.execute(
+                    """
+                    INSERT INTO completed_tasks_history
+                    (user_id, task_date, task_time, description, priority, completed_at, score)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (task["user_id"], task["task_date"], task["task_time"],
+                     task["description"], task["priority"], now_local().isoformat(), score)
+                )
+                conn.execute(
+                    "UPDATE tasks SET status=?, score=?, completed_at=? WHERE id=?",
+                    (status, score, now_local().isoformat(), task_id)
+                )
             else:
-                conn.execute("UPDATE tasks SET status=?, score=? WHERE id=?", (status, score, task_id))
+                conn.execute(
+                    "UPDATE tasks SET status=?, score=? WHERE id=?",
+                    (status, score, task_id)
+                )
         elif action == "late":
-            conn.execute("UPDATE tasks SET status=?, score=? WHERE id=?", ("late", -base_score, task_id))
+            conn.execute(
+                "UPDATE tasks SET status=?, score=? WHERE id=?",
+                ("late", -base_score, task_id)
+            )
         else:
-            conn.execute("UPDATE tasks SET status=?, score=? WHERE id=?", ("skipped", 0, task_id))
-        conn.commit()
+            conn.execute(
+                "UPDATE tasks SET status=?, score=? WHERE id=?",
+                ("skipped", 0, task_id)
+            )
+        conn.commit()  # ✅ SAVE STATUS UPDATE
         
-        if action == "done": update_streak_after_completion()
+        if action == "done":
+            update_streak_after_completion()
         if task["repeat"] != "none":
-            original_date = date.fromisoformat(task["task_date"])
-            next_date = original_date + (timedelta(days=1) if task["repeat"] == "daily" else timedelta(weeks=1) if task["repeat"] == "weekly" else timedelta(days=30))
-            if not conn.execute("SELECT id FROM tasks WHERE user_id = ? AND task_date=? AND task_time=? AND description=? AND repeat=? LIMIT 1", (task["user_id"], next_date.isoformat(), task["task_time"], task["description"], task["repeat"])).fetchone():
-                conn.execute("INSERT INTO tasks (user_id, task_date, task_time, description, priority, repeat) VALUES (?, ?, ?, ?, ?, ?)", (task["user_id"], next_date.isoformat(), task["task_time"], task["description"], task["priority"], task["repeat"]))
-                conn.commit()
-        return True, "done" if action == "done" and delay_minutes <= 5 else ("late" if action == "done" or action == "late" else "skipped"), base_score if action == "done" and delay_minutes <= 5 else (-base_score if action in ("done", "late") else 0)
+            create_next_repeated_task(task, conn)
+            
+        return True, "done" if action == "done" and delay_minutes <= 5 else ("late" if action in ("done", "late") else "skipped"), base_score if action == "done" and delay_minutes <= 5 else (-base_score if action in ("done", "late") else 0)
+
+def create_next_repeated_task(task: sqlite3.Row, conn: sqlite3.Connection) -> None:
+    original_date = date.fromisoformat(task["task_date"])
+    if task["repeat"] == "daily":
+        next_date = original_date + timedelta(days=1)
+    elif task["repeat"] == "weekly":
+        next_date = original_date + timedelta(weeks=1)
+    elif task["repeat"] == "monthly":
+        next_date = original_date + timedelta(days=30)
+    else:
+        return
+        
+    if not conn.execute(
+        """
+        SELECT id FROM tasks
+        WHERE user_id = ? AND task_date=? AND task_time=? AND description=? AND repeat=?
+        LIMIT 1
+        """,
+        (task["user_id"], next_date.isoformat(), task["task_time"], task["description"], task["repeat"])
+    ).fetchone():
+        conn.execute(
+            """
+            INSERT INTO tasks (user_id, task_date, task_time, description, priority, repeat)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (task["user_id"], next_date.isoformat(), task["task_time"],
+             task["description"], task["priority"], task["repeat"])
+        )
+        conn.commit()  # ✅ SAVE REPEATED TASK
 
 # -----------------------------------------------------------------------------
 # Notifications and scheduler
@@ -367,9 +580,13 @@ def update_task_status(task_id: int, action: str) -> tuple[bool, str, int]:
 scheduler = BackgroundScheduler(timezone=LOCAL_TZ, executors={"default": ThreadPoolExecutor(max_workers=4)})
 
 def send_ntfy(message: str, title: str = "تذكير المهام", actions: list[dict[str, str]] | None = None) -> bool:
-    if not NTFY_ENABLED: return False
+    if not NTFY_ENABLED:
+        return False
     try:
-        response = requests.post("https://ntfy.sh/", json={"topic": NTFY_TOPIC, "title": title, "message": message, "priority": 4, "actions": actions} if actions else {"topic": NTFY_TOPIC, "title": title, "message": message, "priority": 4}, timeout=8)
+        payload = {"topic": NTFY_TOPIC, "title": title, "message": message, "priority": 4}
+        if actions:
+            payload["actions"] = actions
+        response = requests.post("https://ntfy.sh/", json=payload, timeout=8)
         response.raise_for_status()
         return True
     except requests.RequestException as exc:
@@ -379,24 +596,52 @@ def send_ntfy(message: str, title: str = "تذكير المهام", actions: lis
 def schedule_reminder(task_id: int, task_date: str, task_time: str, description: str) -> None:
     try:
         reminder_at = LOCAL_TZ.localize(datetime.strptime(f"{task_date} {task_time}", "%Y-%m-%d %H:%M"))
-        if reminder_at <= now_local(): return
+        if reminder_at <= now_local():
+            return
         pre_at = reminder_at - timedelta(minutes=5)
         if pre_at > now_local():
-            scheduler.add_job(lambda: send_ntfy(f"باقي 5 دقائق على موعد: {description}", "تذكير مبكر"), DateTrigger(run_date=pre_at, timezone=LOCAL_TZ), id=f"pre_{task_id}", replace_existing=True)
-        scheduler.add_job(lambda: send_initial_reminder(task_id, description), DateTrigger(run_date=reminder_at, timezone=LOCAL_TZ), id=f"remind_{task_id}", replace_existing=True)
+            scheduler.add_job(
+                lambda: send_ntfy(f"باقي 5 دقائق على موعد: {description}", "تذكير مبكر"),
+                DateTrigger(run_date=pre_at, timezone=LOCAL_TZ),
+                id=f"pre_{task_id}",
+                replace_existing=True
+            )
+        scheduler.add_job(
+            lambda: send_initial_reminder(task_id, description),
+            DateTrigger(run_date=reminder_at, timezone=LOCAL_TZ),
+            id=f"remind_{task_id}",
+            replace_existing=True
+        )
     except (TypeError, ValueError) as exc:
         logger.warning("Could not schedule task %s: %s", task_id, exc)
 
 def send_initial_reminder(task_id: int, description: str) -> None:
-    actions = [{"action": "http", "label": "أنجزتها", "url": f"{PUBLIC_URL}/respond/{task_id}/done"}, {"action": "http", "label": "متأخرة", "url": f"{PUBLIC_URL}/respond/{task_id}/late"}, {"action": "http", "label": "تخطي", "url": f"{PUBLIC_URL}/respond/{task_id}/skip"}] if PUBLIC_URL else None
+    actions = None
+    if PUBLIC_URL:
+        actions = [
+            {"action": "http", "label": "أنجزتها", "url": f"{PUBLIC_URL}/respond/{task_id}/done"},
+            {"action": "http", "label": "متأخرة", "url": f"{PUBLIC_URL}/respond/{task_id}/late"},
+            {"action": "http", "label": "تخطي", "url": f"{PUBLIC_URL}/respond/{task_id}/skip"},
+        ]
     with connect_db() as conn:
-        conn.execute("UPDATE tasks SET reminded_at=? WHERE id=? AND status='pending'", (now_local().isoformat(), task_id))
-        conn.commit()
+        conn.execute(
+            "UPDATE tasks SET reminded_at=? WHERE id=? AND status='pending'",
+            (now_local().isoformat(), task_id)
+        )
+        conn.commit()  # ✅ SAVE REMINDER STATUS
     send_ntfy(f"حان وقت الإنجاز: {description}", "وقت التنفيذ", actions)
 
 def schedule_pending_tasks() -> None:
     with connect_db() as conn:
-        for task in conn.execute("SELECT id, task_date, task_time, description FROM tasks WHERE task_date=? AND status='pending' AND reminded_at IS NULL", (today_iso(),)).fetchall():
+        tasks = conn.execute(
+            """
+            SELECT id, task_date, task_time, description
+            FROM tasks
+            WHERE task_date=? AND status='pending' AND reminded_at IS NULL
+            """,
+            (today_iso(),)
+        ).fetchall()
+        for task in tasks:
             schedule_reminder(task["id"], task["task_date"], task["task_time"], task["description"])
 
 def daily_rollover() -> None:
@@ -405,7 +650,8 @@ def daily_rollover() -> None:
         users = conn.execute("SELECT id FROM users").fetchall()
     for user in users:
         archive_old_tasks_for_user(user["id"])
-        if AUTO_DAILY_TASKS: add_daily_tasks_for_user(user["id"])
+        if AUTO_DAILY_TASKS:
+            add_daily_tasks_for_user(user["id"])
     schedule_pending_tasks()
     logger.info("Daily rollover completed for %s users", len(users))
 
@@ -413,7 +659,12 @@ def start_scheduler() -> None:
     repair_db()
     daily_rollover()
     if not scheduler.running:
-        scheduler.add_job(daily_rollover, CronTrigger(hour=0, minute=1, timezone=LOCAL_TZ), id="daily_rollover", replace_existing=True)
+        scheduler.add_job(
+            daily_rollover,
+            CronTrigger(hour=0, minute=1, timezone=LOCAL_TZ),
+            id="daily_rollover",
+            replace_existing=True
+        )
         scheduler.start()
         logger.info("Scheduler started with daily rollover at 00:01")
 
@@ -442,8 +693,22 @@ a{text-decoration:none;color:inherit}button,input,select{font:inherit}button{cur
 def render_page(body: str, **context: Any) -> str:
     user = get_current_user()
     context["user"] = user
-    context["auth_links"] = f"""<div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:space-between;align-items:center;font-size:14px;"><span style="font-weight:700;">👤 {user['username']}</span><div><a href="{url_for('logout')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">تسجيل الخروج</a></div></div>""" if user else f"""<div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:flex-end;align-items:center;gap:15px;font-size:14px;"><a href="{url_for('login')}" class="btn btn-primary" style="padding:5px 15px;font-size:13px;">تسجيل الدخول</a><a href="{url_for('signup')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">إنشاء حساب</a></div>"""
-    return render_template_string(f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="جدول أيزنهاور لإدارة المهام اليومية"><title>{{{{ title }}}}</title><style>{BASE_STYLE}</style></head><body>{{{{ auth_links | safe }}}}{body}</body></html>""", title=context.pop("title", "جدول أيزنهاور"), **context)
+    context["auth_links"] = f"""
+    <div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:space-between;align-items:center;font-size:14px;">
+        <span style="font-weight:700;"> {user['username']}</span>
+        <div><a href="{url_for('logout')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">تسجيل الخروج</a></div>
+    </div>
+    """ if user else f"""
+    <div style="background:white;padding:10px 30px;border-bottom:1px solid #e4e9f2;display:flex;justify-content:flex-end;align-items:center;gap:15px;font-size:14px;">
+        <a href="{url_for('login')}" class="btn btn-primary" style="padding:5px 15px;font-size:13px;">تسجيل الدخول</a>
+        <a href="{url_for('signup')}" class="btn btn-light" style="padding:5px 15px;font-size:13px;">إنشاء حساب</a>
+    </div>
+    """
+    return render_template_string(
+        f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="جدول أيزنهاور لإدارة المهام اليومية"><title>{{{{ title }}}}</title><style>{BASE_STYLE}</style></head><body>{{{{ auth_links | safe }}}}{body}</body></html>""",
+        title=context.pop("title", "جدول أيزنهاور"),
+        **context,
+    )
 
 AUTH_BODY = """
 <main style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 10%,#dfe7ff 0,transparent 60%),#f0f4fe;font-family:Cairo,sans-serif;padding:20px;">
@@ -452,7 +717,7 @@ AUTH_BODY = """
  <div style="text-align:center;margin-bottom:28px;">
  <div style="width:68px;height:68px;border-radius:22px;background:linear-gradient(145deg,#4b46e5,#7b6aff);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:30px;color:#fff;box-shadow:0 12px 28px rgba(75,70,229,0.25);">✓</div>
  <h1 style="margin:0;font-size:28px;font-weight:800;color:#172033;letter-spacing:-0.5px;">{{ title }}</h1>
- <p style="color:#708096;font-size:15px;margin-top:4px;">{{ 'أهلاً بعودتك 👋' if mode == 'login' else 'انضم إلينا 🚀' }}</p>
+ <p style="color:#708096;font-size:15px;margin-top:4px;">{{ 'أهلاً بعودتك ' if mode == 'login' else 'انضم إلينا 🚀' }}</p>
  </div>
 {% with messages = get_flashed_messages(with_categories=true) %}
 {% for category, message in messages %}
@@ -582,10 +847,14 @@ def validate_form(form: Any) -> tuple[str, str, str, str, str]:
     repeat = form.get("repeat", "none")
     datetime.strptime(task_date, "%Y-%m-%d")
     datetime.strptime(task_time, "%H:%M")
-    if not description: raise ValueError("اكتب وصف المهمة أولًا")
-    if len(description) > 160: raise ValueError("وصف المهمة طويل جدًا")
-    if priority not in PRIORITIES: raise ValueError("الأولوية غير صحيحة")
-    if repeat not in REPEAT_LABELS: raise ValueError("نوع التكرار غير صحيح")
+    if not description:
+        raise ValueError("اكتب وصف المهمة أولًا")
+    if len(description) > 160:
+        raise ValueError("وصف المهمة طويل جدًا")
+    if priority not in PRIORITIES:
+        raise ValueError("الأولوية غير صحيحة")
+    if repeat not in REPEAT_LABELS:
+        raise ValueError("نوع التكرار غير صحيح")
     return task_date, task_time, description, priority, repeat
 
 @app.context_processor
@@ -594,7 +863,8 @@ def inject_context() -> dict[str, Any]:
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if get_current_user(): return redirect(url_for("index"))
+    if get_current_user():
+        return redirect(url_for("index"))
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
@@ -611,7 +881,8 @@ def login():
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
-    if get_current_user(): return redirect(url_for("index"))
+    if get_current_user():
+        return redirect(url_for("index"))
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
@@ -636,10 +907,26 @@ def logout():
 def index():
     tasks = get_today_tasks()
     grouped = {key: [] for key in PRIORITIES}
-    for task in tasks: grouped.setdefault(task["priority"], []).append(task)
+    for task in tasks:
+        grouped.setdefault(task["priority"], []).append(task)
     done_count = sum(task["status"] == "done" for task in tasks)
     total = len(tasks)
-    return render_page(HOME_BODY, title="جدول أيزنهاور", tasks=tasks, grouped_tasks=grouped, today=today_iso(), today_label=now_local().strftime("%Y-%m-%d"), default_time=now_local().strftime("%H:%M"), total=total, done_count=done_count, progress=round(done_count / total * 100) if total else 0, today_score=sum(task["score"] for task in tasks if task["status"] in {"done", "late"}), streak=get_streak(), ntfy_state="مفعّلة" if NTFY_ENABLED else "متوقفة", timezone_name=TIMEZONE_NAME)
+    return render_page(
+        HOME_BODY,
+        title="جدول أيزنهاور",
+        tasks=tasks,
+        grouped_tasks=grouped,
+        today=today_iso(),
+        today_label=now_local().strftime("%Y-%m-%d"),
+        default_time=now_local().strftime("%H:%M"),
+        total=total,
+        done_count=done_count,
+        progress=round(done_count / total * 100) if total else 0,
+        today_score=sum(task["score"] for task in tasks if task["status"] in {"done", "late"}),
+        streak=get_streak(),
+        ntfy_state="مفعّلة" if NTFY_ENABLED else "متوقفة",
+        timezone_name=TIMEZONE_NAME,
+    )
 
 @app.route("/add", methods=["POST"])
 @login_required
@@ -647,7 +934,8 @@ def add():
     try:
         data = validate_form(request.form)
         task_id = add_task(*data)
-        if data[0] == today_iso(): schedule_reminder(task_id, data[0], data[1], data[2])
+        if data[0] == today_iso():
+            schedule_reminder(task_id, data[0], data[1], data[2])
         flash("تمت إضافة المهمة بنجاح", "success")
     except (TypeError, ValueError) as exc:
         flash(f"تعذر إضافة المهمة: {exc}", "error")
@@ -657,8 +945,10 @@ def add():
 @login_required
 def task_status(task_id: int, action: str):
     ok, result, score = update_task_status(task_id, action)
-    if ok: flash(f"تم تسجيل المهمة كـ {STATUS_LABELS.get(result, result)} ({score:+d} نقطة)", "success")
-    else: flash(result, "error")
+    if ok:
+        flash(f"تم تسجيل المهمة كـ {STATUS_LABELS.get(result, result)} ({score:+d} نقطة)", "success")
+    else:
+        flash(result, "error")
     return redirect(url_for("index"))
 
 @app.route("/respond/<int:task_id>/<action>")
@@ -675,7 +965,7 @@ def delete(task_id: int):
         return redirect(url_for("index"))
     with connect_db() as conn:
         cursor = conn.execute("DELETE FROM tasks WHERE id=? AND user_id=?", (task_id, user_id))
-        conn.commit()
+        conn.commit()  # ✅ SAVE DELETION
         flash("تم حذف المهمة" if cursor.rowcount else "المهمة غير موجودة", "success" if cursor.rowcount else "error")
     return redirect(url_for("index"))
 
@@ -690,8 +980,14 @@ def edit(task_id: int):
         try:
             data = validate_form(request.form)
             with connect_db() as conn:
-                conn.execute("UPDATE tasks SET task_date=?, task_time=?, description=?, priority=?, repeat=? WHERE id=? AND user_id=?", (*data, task_id, task["user_id"]))
-                conn.commit()
+                conn.execute(
+                    """
+                    UPDATE tasks SET task_date=?, task_time=?, description=?, priority=?, repeat=?
+                    WHERE id=? AND user_id=?
+                    """,
+                    (*data, task_id, task["user_id"])
+                )
+                conn.commit()  # ✅ SAVE EDIT
             flash("تم حفظ تعديلات المهمة", "success")
             return redirect(url_for("index"))
         except (TypeError, ValueError) as exc:
@@ -746,7 +1042,7 @@ def repair_db_route():
 @app.route("/reset_streak", methods=["POST"])
 @login_required
 def reset_streak():
-    do_reset_streak() # ✅ الآن تستدعي الدالة المساعدة بأمان
+    do_reset_streak()  # ✅ Call the database function, not itself
     flash("تمت إعادة الستريك إلى صفر", "success")
     return redirect(url_for("index"))
 
